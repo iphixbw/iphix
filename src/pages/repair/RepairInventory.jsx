@@ -36,7 +36,7 @@ export default function RepairInventory({ shop }) {
   // part to a job there) fires the browser's storage event here.
   useEffect(() => {
     function onStorage(e) {
-      if (e.key === 'phonefix_repair_stock_changed') fetchParts()
+      if (e.key === 'iphix_repair_stock_changed') fetchParts()
     }
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
@@ -169,6 +169,8 @@ export function PartModal({ shop, part, onClose, onSaved }) {
   const [brandsInUse, setBrandsInUse] = useState([])
   const [showNewCategory, setShowNewCategory] = useState(false)
   const [newCategoryName, setNewCategoryName] = useState('')
+  const [livePart, setLivePart] = useState(part)
+  const [showAdjust, setShowAdjust] = useState(false)
   const [form, setForm] = useState({
     sku: part?.sku || '', barcode: part?.barcode || '', name: part?.name || '',
     compatible_models: part?.compatible_models || '', category: part?.category || '',
@@ -306,8 +308,12 @@ export function PartModal({ shop, part, onClose, onSaved }) {
           <div><label style={lbl}>Location</label><input style={inp} placeholder="e.g. Shelf A-3" value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} /></div>
         </div>
         {part && (
-          <div style={{ background: '#fdf8f3', borderRadius: '8px', padding: '10px 12px', marginBottom: '12px', fontSize: '12px', color: '#8a7a63' }}>
-            Current stock ({part.current_stock || 0} units) is managed by purchases and job/sale usage — this can't be edited directly here. To add stock, record a purchase.
+          <div style={{ background: '#fdf8f3', borderRadius: '8px', padding: '10px 12px', marginBottom: '12px', fontSize: '12px', color: '#8a7a63', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <span>Current stock: <strong style={{ color: '#1c1917' }}>{livePart?.current_stock || 0} units</strong> — normally managed by purchases and job/sale usage.</span>
+            <button onClick={() => setShowAdjust(true)}
+              style={{ padding: '6px 12px', background: '#1c1917', color: '#f0b23d', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: '700', fontSize: '11px', whiteSpace: 'nowrap' }}>
+              ⚙ Adjust Stock
+            </button>
           </div>
         )}
         <div style={grid2}>
@@ -319,6 +325,108 @@ export function PartModal({ shop, part, onClose, onSaved }) {
         <div style={{ display: 'flex', gap: '10px' }}>
           <button onClick={onClose} style={{ flex: 1, padding: '11px', background: '#f5f1ea', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '700', color: '#78716c' }}>Cancel</button>
           <button onClick={handleSave} disabled={saving} style={{ flex: 2, padding: '11px', background: 'linear-gradient(135deg,#f0b23d,#d4881f)', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '800', color: '#1c1917' }}>{saving ? 'Saving...' : '✓ Save Part'}</button>
+        </div>
+      </div>
+
+      {showAdjust && livePart && (
+        <StockAdjustmentModal
+          shop={shop} part={livePart}
+          onClose={() => setShowAdjust(false)}
+          onAdjusted={(freshPart) => { setLivePart(freshPart); setShowAdjust(false); onSaved() }}
+        />
+      )}
+    </div>
+  )
+}
+
+// Manual stock correction with a mandatory reason, logged to
+// repair_stock_adjustments for a permanent audit trail. Keeps FIFO batches in
+// sync rather than just moving the current_stock number: an increase creates a
+// new batch at the given cost, a decrease consumes from existing batches
+// oldest-first via repair_fifo_consume — same mechanics a real purchase or job
+// usage would go through, so Inventory Valuation stays accurate afterward.
+function StockAdjustmentModal({ shop, part, onClose, onAdjusted }) {
+  const [type, setType] = useState('increase')
+  const [quantity, setQuantity] = useState('')
+  const [unitCost, setUnitCost] = useState(String(part.average_cost || part.purchase_price || ''))
+  const [reason, setReason] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const qty = parseFloat(quantity) || 0
+  const currentStock = part.current_stock || 0
+
+  async function handleAdjust() {
+    if (!qty || qty <= 0) return toast.error('Enter a valid quantity')
+    if (!reason.trim()) return toast.error('A reason is required for stock adjustments')
+    if (type === 'decrease' && qty > currentStock) return toast.error(`Cannot remove more than the current stock (${currentStock})`)
+    setSaving(true)
+    try {
+      if (type === 'increase') {
+        const cost = parseFloat(unitCost) || 0
+        if (cost <= 0) { toast.error('Enter a unit cost for the added stock'); setSaving(false); return }
+        await supabase.rpc('repair_fifo_add_batch', { p_part_id: part.id, p_purchase_id: null, p_quantity: qty, p_unit_cost: cost })
+        await supabase.rpc('repair_add_part_stock', { p_part_id: part.id, p_quantity: qty })
+      } else {
+        await supabase.rpc('repair_fifo_consume', { p_part_id: part.id, p_quantity: qty })
+        await supabase.rpc('repair_deduct_part_stock', { p_part_id: part.id, p_quantity: qty })
+      }
+      const newStock = type === 'increase' ? currentStock + qty : currentStock - qty
+      await supabase.from('repair_stock_adjustments').insert({
+        part_id: part.id, shop_id: shop?.id || null, adjustment_type: type,
+        quantity: qty, unit_cost: type === 'increase' ? parseFloat(unitCost) || 0 : null,
+        previous_stock: currentStock, new_stock: newStock, reason: reason.trim(),
+      })
+      toast.success(`Stock ${type === 'increase' ? 'increased' : 'decreased'} — ${part.name} now at ${newStock} units`)
+      const { data: fresh } = await supabase.from('repair_parts').select('*').eq('id', part.id).single()
+      onAdjusted(fresh || { ...part, current_stock: newStock })
+    } catch (e) { toast.error('Failed: ' + e.message) }
+    setSaving(false)
+  }
+
+  const inp = { width: '100%', padding: '9px 12px', border: '1.5px solid #e7dfd3', borderRadius: '8px', fontSize: '13px', boxSizing: 'border-box' }
+  const lbl = { display: 'block', marginBottom: '5px', fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: '20px' }}>
+      <div style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '100%', maxWidth: '400px' }}>
+        <h3 style={{ fontSize: '16px', fontWeight: '800', margin: '0 0 4px', color: '#1c1917' }}>Adjust Stock</h3>
+        <p style={{ fontSize: '12px', color: '#8a7a63', margin: '0 0 16px' }}>{part.name} — currently {currentStock} units</p>
+
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
+          <button onClick={() => setType('increase')}
+            style={{ flex: 1, padding: '9px', borderRadius: '8px', border: type === 'increase' ? '1.5px solid #059669' : '1.5px solid #e7dfd3', background: type === 'increase' ? '#f0fdf4' : 'white', color: type === 'increase' ? '#059669' : '#78716c', fontWeight: '700', fontSize: '13px', cursor: 'pointer' }}>
+            + Increase
+          </button>
+          <button onClick={() => setType('decrease')}
+            style={{ flex: 1, padding: '9px', borderRadius: '8px', border: type === 'decrease' ? '1.5px solid #e11d48' : '1.5px solid #e7dfd3', background: type === 'decrease' ? '#fff1f2' : 'white', color: type === 'decrease' ? '#e11d48' : '#78716c', fontWeight: '700', fontSize: '13px', cursor: 'pointer' }}>
+            − Decrease
+          </button>
+        </div>
+
+        <div style={{ marginBottom: '10px' }}>
+          <label style={lbl}>Quantity to {type === 'increase' ? 'add' : 'remove'}</label>
+          <input type="number" style={inp} value={quantity} onChange={e => setQuantity(e.target.value)} autoFocus />
+        </div>
+
+        {type === 'increase' && (
+          <div style={{ marginBottom: '10px' }}>
+            <label style={lbl}>Unit Cost (for the new stock)</label>
+            <input type="number" style={inp} value={unitCost} onChange={e => setUnitCost(e.target.value)} />
+          </div>
+        )}
+
+        <div style={{ marginBottom: '18px' }}>
+          <label style={lbl}>Reason *</label>
+          <textarea style={{ ...inp, minHeight: '70px' }} placeholder="e.g. physical stock count correction, damaged/written off, found extra units"
+            value={reason} onChange={e => setReason(e.target.value)} />
+        </div>
+
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button onClick={onClose} style={{ flex: 1, padding: '10px', background: '#f5f1ea', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '700', color: '#78716c' }}>Cancel</button>
+          <button onClick={handleAdjust} disabled={saving}
+            style={{ flex: 1, padding: '10px', background: type === 'increase' ? '#059669' : '#e11d48', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '800' }}>
+            {saving ? 'Saving...' : 'Confirm'}
+          </button>
         </div>
       </div>
     </div>

@@ -11,7 +11,7 @@ export default function Settings({ session }) {
   const [adjSaving, setAdjSaving] = useState(false)
   const [adjHistory, setAdjHistory] = useState([])
   const [expenseCategories, setExpenseCategories] = useState(() => {
-    try { const s = localStorage.getItem('phonefix_expense_categories'); return s ? JSON.parse(s) : ['Rent', 'Utilities', 'Salaries', 'Transport', 'Maintenance', 'Office Supplies', 'Marketing', 'Other'] } catch { return ['Rent', 'Utilities', 'Salaries', 'Transport', 'Maintenance', 'Office Supplies', 'Marketing', 'Other'] }
+    try { const s = localStorage.getItem('iphix_expense_categories'); return s ? JSON.parse(s) : ['Rent', 'Utilities', 'Salaries', 'Transport', 'Maintenance', 'Office Supplies', 'Marketing', 'Other'] } catch { return ['Rent', 'Utilities', 'Salaries', 'Transport', 'Maintenance', 'Office Supplies', 'Marketing', 'Other'] }
   })
   const [newCategory, setNewCategory] = useState('')
   const [users, setUsers] = useState([])
@@ -183,7 +183,7 @@ export default function Settings({ session }) {
   // ── Shop management ──────────────────────────────────────
   function saveCategories(cats) {
     setExpenseCategories(cats)
-    localStorage.setItem('phonefix_expense_categories', JSON.stringify(cats))
+    localStorage.setItem('iphix_expense_categories', JSON.stringify(cats))
   }
   function addCategory() {
     const c = newCategory.trim()
@@ -567,7 +567,7 @@ export default function Settings({ session }) {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
                 <div style={{ gridColumn: '1/-1' }}>
                   <label style={lbl}>Shop Name *</label>
-                  <input type="text" value={shopForm.name} onChange={e => setShopForm(p => ({ ...p, name: e.target.value }))} placeholder="e.g. Phonefix - Colombo" style={inp} />
+                  <input type="text" value={shopForm.name} onChange={e => setShopForm(p => ({ ...p, name: e.target.value }))} placeholder="e.g. iPHIX Technologies - Colombo" style={inp} />
                 </div>
                 <div>
                   <label style={lbl}>Address</label>

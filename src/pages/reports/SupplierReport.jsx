@@ -192,7 +192,7 @@ export default function SupplierReport({ onBack }) {
       <td class="r" style="color:#64748b">${(s.opening_balance||0)>0?'LKR '+fmt(s.opening_balance):'—'}</td>
     </tr>`).join('')
     w.document.write(`<!DOCTYPE html><html><head><title>Supplier Report</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;font-size:11px;color:#1e293b;padding:16px}.hdr{border-bottom:3px solid #1e40af;padding-bottom:10px;margin-bottom:14px}.co{font-size:19px;font-weight:900;color:#1e40af;letter-spacing:1px}.ttl{font-size:14px;font-weight:700;color:#0f172a;margin-top:3px}.sub{font-size:10px;color:#64748b;margin-top:2px}.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:14px}.card{border:1.5px solid #e2e8f0;border-radius:8px;padding:10px 14px}.lbl{font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}.val{font-size:15px;font-weight:800}table{width:100%;border-collapse:collapse;font-size:10px}thead tr{background:#0f172a;color:white}thead th{padding:7px 8px;font-size:9px;font-weight:700;text-transform:uppercase;white-space:nowrap;text-align:left}thead th.r{text-align:right}tbody tr:nth-child(even){background:#f8fafc}tbody td{padding:5px 8px;border-bottom:1px solid #f1f5f9}tbody td.r{text-align:right}tfoot tr{background:#1e293b;color:white}tfoot td{padding:8px;font-weight:800}tfoot td.r{text-align:right}.pl-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:11px}.pl-section{background:#f8fafc;padding:8px 12px;border-radius:6px;margin:8px 0}.pl-total{display:flex;justify-content:space-between;padding:10px;background:#0f172a;color:white;border-radius:6px;font-weight:800;font-size:13px;margin-top:8px}.ftr{margin-top:14px;border-top:2px solid #e2e8f0;padding-top:8px;text-align:center;font-size:9px;color:#94a3b8;font-weight:700}@media print{@page{size:A4 portrait;margin:8mm}body{padding:0}}</style></head><body>
-      <div class="hdr"><div class="co">PHONEFIX (PVT) LTD</div><div class="ttl">Supplier Outstandings Report</div><div class="sub">As of ${dateStr}</div></div>
+      <div class="hdr"><div class="co">IPHIX TECHNOLOGIES</div><div class="ttl">Supplier Outstandings Report</div><div class="sub">As of ${dateStr}</div></div>
       <div class="summary">
         <div class="card"><div class="lbl">Total Suppliers</div><div class="val" style="color:#1e40af">${filtered.length}</div></div>
         <div class="card"><div class="lbl">With Payables</div><div class="val" style="color:#e11d48">${filtered.filter(s=>(s.outstanding_balance||0)>0).length}</div></div>
@@ -202,7 +202,7 @@ export default function SupplierReport({ onBack }) {
       <tbody>${rows}</tbody>
       <tfoot><tr><td colspan="4">TOTALS — ${filtered.length} suppliers</td><td class="r" style="color:#fca5a5">LKR ${fmt(totalPayable)}</td><td></td></tr></tfoot>
       </table>
-      <div class="ftr">Designed for Phonefix (PVT) Ltd &nbsp;·&nbsp; Powered by Techmo Solutions &nbsp;·&nbsp; ${dateStr}</div>
+      <div class="ftr">Designed for iPHIX Technologies &nbsp;·&nbsp; Powered by Techmo Solutions &nbsp;·&nbsp; ${dateStr}</div>
       <script>window.onload=function(){window.print()}<\/script></body></html>`)
     w.document.close()
   }

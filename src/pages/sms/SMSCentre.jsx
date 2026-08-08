@@ -156,7 +156,7 @@ export default function SMSCentre({ session, activeShop }) {
     const targets = reminderCustomers.filter(c => selectedReminders.includes(c.id))
     let sent = 0, failed = 0
     for (const c of targets) {
-      const msg = smsTemplates.paymentReminder(c.name, c.credit_balance, activeShop?.name || 'Phonefix')
+      const msg = smsTemplates.paymentReminder(c.name, c.credit_balance, activeShop?.name || 'iPHIX Technologies')
       const { success } = await sendSMS({
         to: c.phone,
         message: msg,
@@ -258,9 +258,9 @@ export default function SMSCentre({ session, activeShop }) {
               <label style={lbl}>Quick Templates</label>
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                 {[
-                  { label: 'Payment Reminder', msg: smsTemplates.paymentReminder('Customer', 0, activeShop?.name || 'Phonefix') },
-                  { label: 'Invoice Confirmed', msg: smsTemplates.invoiceConfirmed('INV-00001', 0, activeShop?.name || 'Phonefix') },
-                  { label: 'Payment Received', msg: smsTemplates.paymentReceived(0, 'INV-00001', activeShop?.name || 'Phonefix') },
+                  { label: 'Payment Reminder', msg: smsTemplates.paymentReminder('Customer', 0, activeShop?.name || 'iPHIX Technologies') },
+                  { label: 'Invoice Confirmed', msg: smsTemplates.invoiceConfirmed('INV-00001', 0, activeShop?.name || 'iPHIX Technologies') },
+                  { label: 'Payment Received', msg: smsTemplates.paymentReceived(0, 'INV-00001', activeShop?.name || 'iPHIX Technologies') },
                 ].map(t => (
                   <button key={t.label} onClick={() => setComposeMessage(t.msg)}
                     style={{ padding: '6px 12px', background: '#eef2ff', color: '#2563eb', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
@@ -392,7 +392,7 @@ export default function SMSCentre({ session, activeShop }) {
                   {smsTemplates.paymentReminder(
                     reminderCustomers.find(c => selectedReminders.includes(c.id))?.name || 'Customer Name',
                     reminderCustomers.find(c => selectedReminders.includes(c.id))?.credit_balance || 0,
-                    activeShop?.name || 'Phonefix'
+                    activeShop?.name || 'iPHIX Technologies'
                   )}
                 </div>
                 <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '16px' }}>

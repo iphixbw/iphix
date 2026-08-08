@@ -76,7 +76,7 @@ export default function RepairOpeningBalances({ shop }) {
   async function fetchAll() {
     const [ledger, custs, sups, prts] = await Promise.all([
       fetchAllRows('repair_cash_ledger', '*', 'created_at'),
-      fetchAllRows('repair_customers', 'id, name, customer_no, mobile, outstanding_balance', 'name'),
+      fetchAllRows('repair_customers', 'id, name, customer_no, mobile, outstanding_balance, opening_balance', 'name'),
       fetchAllRows('repair_suppliers', 'id, name, supplier_no, outstanding_balance, opening_balance', 'name'),
       fetchAllRows('repair_parts', 'id, name, sku, current_stock, purchase_price, average_cost, selling_price, brand, category', 'name'),
     ])
@@ -89,7 +89,7 @@ export default function RepairOpeningBalances({ shop }) {
     setCategories([...new Set((prts || []).map(p => p.category).filter(Boolean))].sort())
 
     const cBal = {}
-    for (const c of (custs || [])) cBal[c.id] = c.outstanding_balance > 0 ? String(c.outstanding_balance) : ''
+    for (const c of (custs || [])) cBal[c.id] = (c.opening_balance ?? c.outstanding_balance) > 0 ? String(c.opening_balance ?? c.outstanding_balance) : ''
     setCustomerBalances(cBal)
 
     const sBal = {}
@@ -138,8 +138,8 @@ export default function RepairOpeningBalances({ shop }) {
     try {
       for (const c of customers) {
         const val = parseFloat(customerBalances[c.id]) || 0
-        if (val !== (c.outstanding_balance || 0)) {
-          await supabase.from('repair_customers').update({ outstanding_balance: val }).eq('id', c.id)
+        if (val !== (c.opening_balance ?? c.outstanding_balance ?? 0)) {
+          await supabase.from('repair_customers').update({ opening_balance: val, outstanding_balance: val }).eq('id', c.id)
         }
       }
       toast.success('Customer balances saved!')
@@ -209,12 +209,14 @@ export default function RepairOpeningBalances({ shop }) {
             name: row.name,
             mobile: row.mobile,
             address: row.address || null,
+            opening_balance: row.balance || 0,
             outstanding_balance: row.balance || 0,
           })
           if (error) { toast.error(`Failed for "${row.name}": ${error.message}`); continue }
           newCount++
         } else {
           const { error } = await supabase.from('repair_customers').update({
+            opening_balance: row.balance || 0,
             outstanding_balance: row.balance || 0,
             ...(row.mobile ? { mobile: row.mobile } : {}),
             ...(row.address ? { address: row.address } : {}),
@@ -348,10 +350,13 @@ export default function RepairOpeningBalances({ shop }) {
         // repair_parts.current_stock directly — setting current_stock alone
         // here left opening-balance stock with no batch to actually consume,
         // so a job using it got no real cost (or an incorrect one) instead of
-        // the true opening cost. Only add a batch for genuinely NEW quantity —
-        // re-saving this screen for a part whose stock hasn't changed shouldn't
-        // create a duplicate batch each time.
-        const qtyIncrease = qty - (p.current_stock || 0)
+        // the true opening cost. Compare against actual batch coverage, not the
+        // stale current_stock field — otherwise saving this screen a second time
+        // (e.g. entering a cost that was left blank the first time) sees no
+        // change in quantity and wrongly assumes a batch already exists.
+        const { data: existingBatches } = await supabase.from('repair_part_batches').select('quantity_remaining').eq('part_id', p.id)
+        const batchTotal = (existingBatches || []).reduce((s, b) => s + (b.quantity_remaining || 0), 0)
+        const shortfall = qty - batchTotal
         await supabase.from('repair_parts').update({
           current_stock: qty,
           purchase_price: cost,
@@ -360,8 +365,8 @@ export default function RepairOpeningBalances({ shop }) {
           brand: brand || null,
           category: category || null,
         }).eq('id', p.id)
-        if (qtyIncrease > 0.009 && cost > 0) {
-          await supabase.rpc('repair_fifo_add_batch', { p_part_id: p.id, p_purchase_id: null, p_quantity: qtyIncrease, p_unit_cost: cost })
+        if (shortfall > 0.009 && cost > 0) {
+          await supabase.rpc('repair_fifo_add_batch', { p_part_id: p.id, p_purchase_id: null, p_quantity: shortfall, p_unit_cost: cost })
         }
       }
       toast.success('Parts stock saved!')
@@ -449,7 +454,16 @@ export default function RepairOpeningBalances({ shop }) {
           newCount++
         } else {
           const p = row.existing
-          const qtyIncrease = (row.qty || 0) - (p.current_stock || 0)
+          // Actual batch coverage — not the stale current_stock snapshot — is the
+          // real source of truth for whether this part needs a reconciliation
+          // batch. Comparing against current_stock alone misses the case where an
+          // earlier upload set the stock count with no cost (so no batch was
+          // created), and a later upload adds the cost but not the quantity —
+          // current_stock doesn't change, so the old check silently skipped
+          // creating a batch even though one had never existed.
+          const { data: existingBatches } = await supabase.from('repair_part_batches').select('quantity_remaining').eq('part_id', p.id)
+          const batchTotal = (existingBatches || []).reduce((s, b) => s + (b.quantity_remaining || 0), 0)
+          const shortfall = (row.qty || 0) - batchTotal
           const costForBatch = row.cost > 0 ? row.cost : p.purchase_price
           const { error } = await supabase.from('repair_parts').update({
             current_stock: row.qty,
@@ -460,8 +474,8 @@ export default function RepairOpeningBalances({ shop }) {
             category: row.category || p.category || null,
           }).eq('id', p.id)
           if (error) { toast.error(`Failed to update "${row.name}": ${error.message}`); continue }
-          if (qtyIncrease > 0.009 && costForBatch > 0) {
-            await supabase.rpc('repair_fifo_add_batch', { p_part_id: p.id, p_purchase_id: null, p_quantity: qtyIncrease, p_unit_cost: costForBatch })
+          if (shortfall > 0.009 && costForBatch > 0) {
+            await supabase.rpc('repair_fifo_add_batch', { p_part_id: p.id, p_purchase_id: null, p_quantity: shortfall, p_unit_cost: costForBatch })
           }
           updateCount++
         }

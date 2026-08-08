@@ -35,6 +35,12 @@ export default function RepairCustomers({ shop, onOpenJob }) {
 
     // Build a chronological activity statement across jobs + sales + their payments
     const events = []
+    if (c.opening_balance > 0) {
+      events.push({
+        date: c.created_at || new Date(0).toISOString(),
+        label: 'Opening balance brought forward', debit: c.opening_balance, credit: 0, type: 'opening',
+      })
+    }
     ;(j || []).forEach(job => {
       events.push({ date: job.created_at, label: `Repair Job ${job.job_no} — ${job.phone_brand} ${job.phone_model}`, debit: job.grand_total || 0, credit: job.deposit_received || 0, type: 'job' })
     })
@@ -54,10 +60,26 @@ export default function RepairCustomers({ shop, onOpenJob }) {
   const totalSpent = jobs.filter(j => j.status === 'collected').reduce((s, j) => s + (j.grand_total || 0), 0) + sales.reduce((s, sa) => s + (sa.total || 0), 0)
   const outstanding = jobs.reduce((s, j) => s + (j.balance_due || 0), 0) + sales.reduce((s, sa) => s + Math.max(0, (sa.total || 0) - (sa.amount_paid || 0)), 0)
 
+  const totalOutstandingAll = customers.reduce((s, c) => s + Math.max(0, c.outstanding_balance || 0), 0)
+  const totalCreditAll = customers.reduce((s, c) => s + Math.max(0, -(c.outstanding_balance || 0)), 0)
+
   return (
     <div>
       <h1 style={{ fontSize: '22px', fontWeight: '800', color: '#1c1917', margin: '0 0 4px' }}>Repair Customers</h1>
       <p style={{ color: '#8a7a63', fontSize: '14px', margin: '0 0 20px' }}>{customers.length} customers · Search by name, mobile, IMEI, or job number</p>
+
+      <div style={{ display: 'grid', gridTemplateColumns: totalCreditAll > 0 ? 'repeat(2, minmax(200px, 1fr))' : 'minmax(200px, 1fr)', gap: '14px', marginBottom: '20px', maxWidth: '620px' }}>
+        <div style={{ background: '#fff1f2', borderRadius: '14px', padding: '16px 18px', border: '1px solid rgba(0,0,0,0.04)' }}>
+          <div style={{ fontSize: '11px', fontWeight: '700', color: '#e11d48', textTransform: 'uppercase' }}>Total Outstanding</div>
+          <div style={{ fontSize: '21px', fontWeight: '800', color: '#e11d48' }}>{formatLKR(totalOutstandingAll)}</div>
+        </div>
+        {totalCreditAll > 0 && (
+          <div style={{ background: '#f0fdf4', borderRadius: '14px', padding: '16px 18px', border: '1px solid rgba(0,0,0,0.04)' }}>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: '#059669', textTransform: 'uppercase' }}>Total Credit (owed back)</div>
+            <div style={{ fontSize: '21px', fontWeight: '800', color: '#059669' }}>{formatLKR(totalCreditAll)}</div>
+          </div>
+        )}
+      </div>
 
       <input type="text" placeholder="Search customers..." value={search} onChange={e => setSearch(e.target.value)}
         style={{ width: '100%', maxWidth: '400px', padding: '10px 14px', border: '1.5px solid #e7dfd3', borderRadius: '10px', fontSize: '14px', marginBottom: '18px', boxSizing: 'border-box' }} />
@@ -75,7 +97,9 @@ export default function RepairCustomers({ shop, onOpenJob }) {
                   <td style={{ padding: '11px 14px', fontWeight: '600' }}>{c.name}</td>
                   <td style={{ padding: '11px 14px' }}>{c.mobile}</td>
                   <td style={{ padding: '11px 14px', color: '#78716c' }}>{c.email || '—'}</td>
-                  <td style={{ padding: '11px 14px', fontWeight: '700', color: c.outstanding_balance > 0 ? '#e11d48' : '#94a3b8' }}>{formatLKR(c.outstanding_balance || 0)}</td>
+                  <td style={{ padding: '11px 14px', fontWeight: '700', color: c.outstanding_balance > 0 ? '#e11d48' : c.outstanding_balance < 0 ? '#059669' : '#94a3b8' }}>
+                    {c.outstanding_balance < 0 ? `Credit ${formatLKR(Math.abs(c.outstanding_balance))}` : formatLKR(c.outstanding_balance || 0)}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -277,7 +301,7 @@ function ReceivePaymentModal({ shop, customer, jobs, sales, onClose, onPaid }) {
         </div>
         {(method === 'card' || method === 'bank') && (
           <div style={{ marginBottom: '16px' }}>
-            <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478' }}>Phonefix Bank Account</label>
+            <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478' }}>iPHIX Technologies Bank Account</label>
             <select style={inp} value={bankAccountId} onChange={e => setBankAccountId(e.target.value)}>
               <option value="">Select...</option>
               {bankAccounts.map(b => <option key={b.id} value={b.id}>{b.name}{b.bank_name ? ` — ${b.bank_name}` : ''}</option>)}

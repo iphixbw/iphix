@@ -111,33 +111,68 @@ function SupplierList({ shop, suppliers, onChanged }) {
 
   async function openSupplier(s) {
     setSelected(s)
-    await loadStatement(s.id)
+    const { data: fresh } = await supabase.from('repair_suppliers').select('*').eq('id', s.id).single()
+    const supplierRow = fresh || s
+    if (fresh) setSelected(fresh)
+    await loadStatement(supplierRow)
   }
 
-  async function loadStatement(supplierId) {
+  async function loadStatement(supplier) {
+    const supplierId = supplier.id
     const [{ data: purchases }, { data: payments }] = await Promise.all([
       supabase.from('repair_purchases').select('*').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
       supabase.from('repair_supplier_standalone_payments').select('*, bank_accounts(name)').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
     ])
     const events = []
+    if (supplier.opening_balance > 0) {
+      events.push({
+        date: supplier.created_at || new Date(0).toISOString(), type: 'opening',
+        label: 'Opening balance brought forward',
+        debit: supplier.opening_balance, credit: 0, ref: 'OPEN-BAL',
+      })
+    }
     ;(purchases || []).forEach(p => events.push({
       date: p.created_at, type: 'purchase', label: `Purchase ${p.purchase_no}`,
-      debit: p.total, credit: p.amount_paid, ref: p.purchase_no,
+      debit: p.total, credit: p.initial_payment || 0, ref: p.purchase_no,
     }))
-    ;(payments || []).forEach(pay => events.push({
-      date: pay.created_at, type: 'payment', label: `Payment (${pay.payment_method}${pay.bank_accounts?.name ? ' — ' + pay.bank_accounts.name : ''})`,
-      debit: 0, credit: pay.amount, ref: pay.reference,
-    }))
+    ;(payments || []).forEach(pay => {
+      events.push({
+        date: pay.created_at, type: 'payment', label: `Payment (${pay.payment_method}${pay.bank_accounts?.name ? ' — ' + pay.bank_accounts.name : ''})`,
+        debit: 0, credit: pay.amount, ref: pay.reference,
+      })
+      if (pay.cheque_status === 'returned') {
+        events.push({
+          date: pay.returned_at || pay.created_at, type: 'reversal',
+          label: 'Cheque returned/bounced — payment reversed',
+          debit: pay.amount, credit: 0, ref: pay.reference,
+        })
+      }
+    })
     events.sort((a, b) => new Date(a.date) - new Date(b.date))
     let running = 0
     events.forEach(e => { running += e.debit - e.credit; e.balance = running })
-    setStatement(events.reverse())
+    setStatement(events)
   }
 
   const totalPurchased = statement.filter(e => e.type === 'purchase').reduce((s, e) => s + e.debit, 0)
+  const totalOutstandingAll = suppliers.reduce((s, sup) => s + Math.max(0, sup.outstanding_balance || 0), 0)
+  const totalCreditAll = suppliers.reduce((s, sup) => s + Math.max(0, -(sup.outstanding_balance || 0)), 0)
 
   return (
     <div>
+      <div style={{ display: 'grid', gridTemplateColumns: totalCreditAll > 0 ? 'repeat(2, minmax(200px, 1fr))' : 'minmax(200px, 1fr)', gap: '14px', marginBottom: '18px', maxWidth: '620px' }}>
+        <div style={{ background: '#fff1f2', borderRadius: '14px', padding: '16px 18px', border: '1px solid rgba(0,0,0,0.04)' }}>
+          <div style={{ fontSize: '11px', fontWeight: '700', color: '#e11d48', textTransform: 'uppercase' }}>Total Outstanding</div>
+          <div style={{ fontSize: '21px', fontWeight: '800', color: '#e11d48' }}>{formatLKR(totalOutstandingAll)}</div>
+        </div>
+        {totalCreditAll > 0 && (
+          <div style={{ background: '#f0fdf4', borderRadius: '14px', padding: '16px 18px', border: '1px solid rgba(0,0,0,0.04)' }}>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: '#059669', textTransform: 'uppercase' }}>Total Credit (owed to you)</div>
+            <div style={{ fontSize: '21px', fontWeight: '800', color: '#059669' }}>{formatLKR(totalCreditAll)}</div>
+          </div>
+        )}
+      </div>
+
       <button onClick={() => setShowNew(true)} style={{ marginBottom: '14px', padding: '9px 18px', background: '#fef3e2', color: '#d4881f', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '700', fontSize: '13px' }}>+ Add Supplier</button>
       <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #f3ede4', overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -150,7 +185,9 @@ function SupplierList({ shop, suppliers, onChanged }) {
                 <td style={{ padding: '11px 14px', color: '#d4881f', fontWeight: '700' }}>{s.supplier_no}</td>
                 <td style={{ padding: '11px 14px', fontWeight: '600' }}>{s.name}</td>
                 <td style={{ padding: '11px 14px' }}>{s.phone || '—'}</td>
-                <td style={{ padding: '11px 14px', fontWeight: '700', color: s.outstanding_balance > 0 ? '#e11d48' : '#94a3b8' }}>{formatLKR(s.outstanding_balance)}</td>
+                <td style={{ padding: '11px 14px', fontWeight: '700', color: s.outstanding_balance > 0 ? '#e11d48' : s.outstanding_balance < 0 ? '#059669' : '#94a3b8' }}>
+                  {s.outstanding_balance < 0 ? `Credit ${formatLKR(Math.abs(s.outstanding_balance))}` : formatLKR(s.outstanding_balance)}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -174,9 +211,14 @@ function SupplierList({ shop, suppliers, onChanged }) {
                 <div style={{ fontSize: '10px', fontWeight: '700', color: '#d4881f', textTransform: 'uppercase' }}>Total Purchased</div>
                 <div style={{ fontSize: '18px', fontWeight: '800', color: '#d4881f' }}>{formatLKR(totalPurchased)}</div>
               </div>
-              <div style={{ background: selected.outstanding_balance > 0 ? '#fff1f2' : '#f8f5f0', borderRadius: '10px', padding: '12px' }}>
-                <div style={{ fontSize: '10px', fontWeight: '700', color: selected.outstanding_balance > 0 ? '#e11d48' : '#8a7a63', textTransform: 'uppercase' }}>Outstanding</div>
-                <div style={{ fontSize: '18px', fontWeight: '800', color: selected.outstanding_balance > 0 ? '#e11d48' : '#8a7a63' }}>{formatLKR(selected.outstanding_balance)}</div>
+              <div style={{ background: selected.outstanding_balance > 0 ? '#fff1f2' : selected.outstanding_balance < 0 ? '#f0fdf4' : '#f8f5f0', borderRadius: '10px', padding: '12px' }}>
+                <div style={{ fontSize: '10px', fontWeight: '700', color: selected.outstanding_balance > 0 ? '#e11d48' : selected.outstanding_balance < 0 ? '#059669' : '#8a7a63', textTransform: 'uppercase' }}>
+                  {selected.outstanding_balance < 0 ? 'Credit Balance' : 'Outstanding'}
+                </div>
+                <div style={{ fontSize: '18px', fontWeight: '800', color: selected.outstanding_balance > 0 ? '#e11d48' : selected.outstanding_balance < 0 ? '#059669' : '#8a7a63' }}>
+                  {formatLKR(Math.abs(selected.outstanding_balance))}
+                </div>
+                {selected.outstanding_balance < 0 && <div style={{ fontSize: '10px', color: '#059669', marginTop: '2px' }}>Overpaid — owed back to you</div>}
               </div>
             </div>
 
@@ -211,7 +253,7 @@ function SupplierList({ shop, suppliers, onChanged }) {
         <SupplierPaymentModal shop={shop} supplier={selected} onClose={() => setShowPay(false)}
           onPaid={(freshSupplier) => {
             setShowPay(false)
-            loadStatement(selected.id)
+            loadStatement(freshSupplier || selected)
             onChanged()
             if (freshSupplier) setSelected(freshSupplier)
           }} />
@@ -234,7 +276,7 @@ function SupplierList({ shop, suppliers, onChanged }) {
   )
 }
 
-// Item 6: pay down a supplier's outstanding balance via cash or a Phonefix bank account.
+// Item 6: pay down a supplier's outstanding balance via cash or a iPHIX Technologies bank account.
 // The payment is applied FIFO across the supplier's own outstanding purchases (oldest
 // first), updating each purchase's amount_paid/credit_amount — not just the supplier's
 // aggregate balance — so the Purchases list correctly reflects payments made here.
@@ -457,7 +499,7 @@ function NewPurchaseModal({ shop, suppliers, onClose, onCreated, onSuppliersChan
       const purchase_no = await generateRepairPurchaseNo()
       const { data: purchase, error } = await supabase.from('repair_purchases').insert({
         purchase_no, supplier_id: supplierId, shop_id: shop?.id || null, status: 'confirmed',
-        subtotal, total: subtotal, payment_method: paymentMethod, amount_paid: paid, credit_amount: credit,
+        subtotal, total: subtotal, payment_method: paymentMethod, amount_paid: paid, credit_amount: credit, initial_payment: paid,
       }).select().single()
       if (error) throw error
 
@@ -540,7 +582,7 @@ function NewPurchaseModal({ shop, suppliers, onClose, onCreated, onSuppliersChan
           <div>
             <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Payment Method</label>
             <select style={inp} value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}>
-              <option value="credit">Credit</option><option value="cash">Cash</option><option value="bank">Phonefix Bank Account</option>
+              <option value="credit">Credit</option><option value="cash">Cash</option><option value="bank">iPHIX Technologies Bank Account</option>
             </select>
           </div>
           <div>

@@ -123,7 +123,7 @@ export default function Bank({ activeShop, isSuperAdmin }) {
             }
           }
           await supabase.from('repair_supplier_standalone_payments').update({
-            cheque_status: 'returned', status: 'returned',
+            cheque_status: 'returned', status: 'returned', returned_at: new Date().toISOString(),
           }).eq('id', tx.repair_supplier_payment_id)
           const { data: pay } = await supabase.from('repair_supplier_standalone_payments').select('supplier_id').eq('id', tx.repair_supplier_payment_id).single()
           if (pay?.supplier_id) {
@@ -154,20 +154,32 @@ export default function Bank({ activeShop, isSuperAdmin }) {
             toast.success('Cheque marked as returned.')
           }
         } else {
-          const supMatch = ref.match(/Supplier:\s*(.+)/i)
-          if (supMatch) {
-            const supName = supMatch[1].trim()
-            const { data: sups } = await supabase.from('suppliers').select('id, outstanding_balance').ilike('name', supName)
-            if (sups?.length) {
-              await supabase.from('suppliers').update({
-                outstanding_balance: (sups[0].outstanding_balance || 0) + tx.amount
-              }).eq('id', sups[0].id)
-              toast.success(`Cheque returned — LKR ${tx.amount?.toLocaleString('en-LK', { minimumFractionDigits: 2 })} added back to ${supName}'s outstanding balance`)
-            } else {
-              toast.success('Cheque marked as returned. Could not find supplier to reverse balance — adjust manually if needed.')
-            }
+          // Repair division 3rd-party item settlement — items are linked to this
+          // transaction directly (a batch settlement can cover several items with
+          // one cheque), so put every one of them back to pending.
+          const { data: tpItems } = await supabase
+            .from('repair_third_party_items').select('id').eq('bank_transaction_id', tx.id)
+          if (tpItems?.length) {
+            await supabase.from('repair_third_party_items').update({
+              payment_status: 'pending', paid_at: null,
+            }).eq('bank_transaction_id', tx.id)
+            toast.success(`Cheque returned — ${tpItems.length} 3rd-party item${tpItems.length > 1 ? 's' : ''} marked pending again`)
           } else {
-            toast.success('Cheque marked as returned.')
+            const supMatch = ref.match(/Supplier:\s*(.+)/i)
+            if (supMatch) {
+              const supName = supMatch[1].trim()
+              const { data: sups } = await supabase.from('suppliers').select('id, outstanding_balance').ilike('name', supName)
+              if (sups?.length) {
+                await supabase.from('suppliers').update({
+                  outstanding_balance: (sups[0].outstanding_balance || 0) + tx.amount
+                }).eq('id', sups[0].id)
+                toast.success(`Cheque returned — LKR ${tx.amount?.toLocaleString('en-LK', { minimumFractionDigits: 2 })} added back to ${supName}'s outstanding balance`)
+              } else {
+                toast.success('Cheque marked as returned. Could not find supplier to reverse balance — adjust manually if needed.')
+              }
+            } else {
+              toast.success('Cheque marked as returned.')
+            }
           }
         }
       }

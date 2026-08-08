@@ -34,7 +34,7 @@ export default function RepairCash({ shop }) {
   return (
     <div>
       <h1 style={{ fontSize: '22px', fontWeight: '800', color: '#1c1917', margin: '0 0 4px' }}>Repair Cash & Bank Deposits</h1>
-      <p style={{ color: '#8a7a63', fontSize: '14px', margin: '0 0 20px' }}>Separate repair cash account · deposits are the only link to Phonefix's main accounting</p>
+      <p style={{ color: '#8a7a63', fontSize: '14px', margin: '0 0 20px' }}>Separate repair cash account · deposits are the only link to iPHIX Technologies's main accounting</p>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', marginBottom: '24px' }}>
         {[
@@ -138,7 +138,7 @@ function DepositModal({ shop, bankAccounts, cashBalance, onClose, onDeposited })
         <div style={{ marginBottom: '14px' }}>
           <label style={lbl}>Bank Account</label>
           <select style={inp} value={bankAccountId} onChange={e => setBankAccountId(e.target.value)}>
-            <option value="">Select Phonefix bank account...</option>
+            <option value="">Select iPHIX Technologies bank account...</option>
             {bankAccounts.map(b => <option key={b.id} value={b.id}>{b.name}{b.bank_name ? ` — ${b.bank_name}` : ''}</option>)}
           </select>
           {bankAccounts.length === 0 && <div style={{ fontSize: '11.5px', color: '#e11d48', marginTop: '4px' }}>No bank accounts found — add one in the retail system's Bank page first.</div>}

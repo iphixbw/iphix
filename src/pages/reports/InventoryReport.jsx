@@ -119,7 +119,7 @@ export default function InventoryReport({ shops = [], onBack }) {
       @media print { @page { size: A4 landscape; margin: 8mm } body { padding: 0 } }
     </style></head><body>
     <div class="header">
-      <div class="co">PHONEFIX (PVT) LTD</div>
+      <div class="co">IPHIX TECHNOLOGIES</div>
       <div class="title">Inventory Report</div>
       <div class="meta">Generated on ${dateStr} &nbsp;·&nbsp; ${filtered.length} items &nbsp;·&nbsp; Filter: ${stockFilter === 'all' ? 'All Items' : stockFilter === 'in' ? 'In Stock' : stockFilter === 'out' ? 'Out of Stock' : 'Low Stock'}</div>
     </div>
@@ -145,7 +145,7 @@ export default function InventoryReport({ shops = [], onBack }) {
         <td></td>
       </tr></tfoot>
     </table>
-    <div class="footer">Designed for Phonefix (PVT) Ltd &nbsp;·&nbsp; Powered by Techmo Solutions &nbsp;·&nbsp; ${dateStr}</div>
+    <div class="footer">Designed for iPHIX Technologies &nbsp;·&nbsp; Powered by Techmo Solutions &nbsp;·&nbsp; ${dateStr}</div>
     <script>window.onload=function(){window.print()}<\/script>
     </body></html>`)
     w.document.close()

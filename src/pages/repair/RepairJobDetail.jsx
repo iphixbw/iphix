@@ -22,7 +22,7 @@ export default function RepairJobDetail({ jobId, shop, onBack }) {
   const [editingPriceId, setEditingPriceId] = useState(null)
   const [priceInput, setPriceInput] = useState('')
 
-  useEffect(() => { fetchAll() }, [jobId])
+  useEffect(() => { refreshAndRecalc() }, [jobId])
 
   async function fetchAll() {
     setLoading(true)
@@ -52,7 +52,7 @@ export default function RepairJobDetail({ jobId, shop, onBack }) {
   // from component state that may not have re-rendered yet.
   async function refreshAndRecalc() {
     const fresh = await fetchAll()
-    if (fresh.j) {
+    if (fresh.j && fresh.j.status !== 'voided') {
       const updatedTotals = await recalcTotals(fresh.j, fresh.jp, fresh.tpi, fresh.jc, fresh.jpay)
       // recalcTotals writes the new totals to the database, but fetchAll() above
       // already ran and populated `job` state with the PRE-recalc numbers — without
@@ -626,7 +626,7 @@ function CollectPaymentModal({ job, balanceDue, onClose, onCollected }) {
         </div>
         {(method === 'card' || method === 'bank_transfer') && (
           <div style={{ marginBottom: '16px' }}>
-            <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478' }}>Phonefix Bank Account</label>
+            <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478' }}>iPHIX Technologies Bank Account</label>
             <select style={inp} value={bankAccountId} onChange={e => setBankAccountId(e.target.value)}>
               <option value="">Select...</option>
               {bankAccounts.map(b => <option key={b.id} value={b.id}>{b.name}{b.bank_name ? ` — ${b.bank_name}` : ''}</option>)}
@@ -682,7 +682,7 @@ function AddPartModal({ shop, parts, jobId, onClose, onAdded }) {
         // Signal other open instances (e.g. the Inventory page, if kept alive by
         // some navigation caching) that stock changed — a plain custom event, since
         // localStorage's own storage event doesn't fire in the same tab that set it.
-        localStorage.setItem('phonefix_repair_stock_changed', String(Date.now()))
+        localStorage.setItem('iphix_repair_stock_changed', String(Date.now()))
         toast.success('Part added')
       }
       onAdded()

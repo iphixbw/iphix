@@ -215,7 +215,7 @@ export default function PurchaseReturns({ activeShop, session }) {
         const newOutstanding = updatedSupplier?.outstanding_balance || 0
         const message = smsTemplates.purchaseReturnConfirmed(
           selectedSupplier.name, returnNo, subtotal, newOutstanding,
-          activeShop?.name || 'Phonefix'
+          activeShop?.name || 'iPHIX Technologies'
         )
         sendSMS({
           to: selectedSupplier.phone,
@@ -308,7 +308,7 @@ export default function PurchaseReturns({ activeShop, session }) {
     .row{display:flex;justify-content:space-between;padding:1px 0;font-size:13px;font-weight:bold}
     .tot{display:flex;justify-content:space-between;font-weight:bold;font-size:16px;padding:3px 0}
     @media print{body{padding:0 0 60mm 0}@page{size:80mm auto;margin:1mm 1mm 0 1mm}}</style></head><body>
-    <div class="c b" style="font-size:16px;font-weight:bold;letter-spacing:1px">PHONEFIX (PVT) LTD</div>
+    <div class="c b" style="font-size:16px;font-weight:bold;letter-spacing:1px">IPHIX TECHNOLOGIES</div>
     <div class="c" style="font-size:11px;font-weight:bold">YOUR TRUSTED TECHNOLOGY PARTNER</div>
     <div class="dashed"></div>
     <div class="c b" style="font-size:14px;letter-spacing:1px">PURCHASE RETURN</div>
@@ -335,7 +335,7 @@ export default function PurchaseReturns({ activeShop, session }) {
       <span>Date : ${dateStr}</span><span>Time : ${timeStr}</span>
     </div>
     <div class="solid"></div>
-    <div class="c b" style="font-size:13px;margin:3px 0">Designed for Phonefix (PVT) Ltd</div>
+    <div class="c b" style="font-size:13px;margin:3px 0">Designed for iPHIX Technologies</div>
     <div class="c" style="font-size:11px;font-weight:bold;margin-top:2px">Powered by Techmo Solutions</div>
     <div style='height:60mm'></div><script>window.onload=function(){window.print()}<\/script></body></html>`)
     w.document.close()

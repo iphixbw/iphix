@@ -427,7 +427,7 @@ export default function InvoiceView({ invoice, onBack, isCashier = false, sessio
       if (details.customers?.phone) {
         const msg = smsTemplates.customerPaymentCollected(
           details.customers.name, payAmt, Math.max(0, newBalance),
-          details.shops?.name || 'Phonefix'
+          details.shops?.name || 'iPHIX Technologies'
         )
         sendSMS({ to: details.customers.phone, message: msg, triggeredBy: 'invoice_payment', referenceType: 'invoice', referenceId: invoice.id })
           .then(({ success }) => { if (success) toast.success('SMS sent to customer') })
@@ -535,7 +535,7 @@ export default function InvoiceView({ invoice, onBack, isCashier = false, sessio
     const fmt2 = n => parseFloat(n||0).toLocaleString('en-LK',{minimumFractionDigits:2})
     const dateStr2 = new Date(d?.created_at||Date.now()).toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric'})
     const timeStr2 = new Date(d?.created_at||Date.now()).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'})
-    const shopName2 = 'PHONEFIX (PVT) LTD'
+    const shopName2 = 'IPHIX TECHNOLOGIES'
     w.document.write(`<!DOCTYPE html><html><head><title>Receipt ${d?.invoice_no}</title>
     <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Arial',sans-serif;font-size:13px;font-weight:bold;width:75mm;margin:0 auto;padding:4px}.c{text-align:center}.b{font-weight:bold}.dashed{border-top:1px dashed #000;margin:4px 0}.solid{border-top:2px solid #000;margin:4px 0}.row{display:flex;justify-content:space-between;padding:1px 0;font-size:13px;font-weight:bold}.tot{display:flex;justify-content:space-between;font-weight:bold;font-size:16px;padding:3px 0}.bal{display:flex;justify-content:space-between;font-weight:bold;font-size:14px;padding:2px 0}@media print{@page{size:75mm auto;margin:1mm}}</style></head><body>
     <div class="c b" style="font-size:18px;font-weight:bold;letter-spacing:1px">${shopName2}</div>
@@ -566,7 +566,7 @@ export default function InvoiceView({ invoice, onBack, isCashier = false, sessio
     <div class="solid"></div>
     <div class="c b" style="font-size:13px;font-weight:bold;margin:3px 0">★ Thank You! Visit Again ★</div>
     <div class="c" style="font-size:11px;font-weight:bold">Your trust is our greatest reward.</div>
-    <div class="c" style="font-size:11px;font-weight:bold;margin-top:2px">Designed for Phonefix (PVT) Ltd · Powered by Techmo Solutions</div>
+    <div class="c" style="font-size:11px;font-weight:bold;margin-top:2px">Designed for iPHIX Technologies · Powered by Techmo Solutions</div>
     <script>window.onload=function(){window.print()}<\/script></body></html>`)
     w.document.close()
   }
@@ -658,7 +658,7 @@ export default function InvoiceView({ invoice, onBack, isCashier = false, sessio
 
   <!-- Header Band -->
   <div class="header-band">
-    <div class="co-name">PHONEFIX (PVT) LTD</div>
+    <div class="co-name">IPHIX TECHNOLOGIES</div>
     <div class="co-tagline">Your Trusted Technology Partner</div>
     <div class="co-contact">${d?.shops?.address ? d.shops.address + (d?.shops?.phone ? '  ·  ' + d.shops.phone : '') : (d?.shops?.phone || '')}</div>
   </div>
@@ -667,7 +667,7 @@ export default function InvoiceView({ invoice, onBack, isCashier = false, sessio
   <div class="inv-banner">
     <div>
       <div class="inv-banner-title">Invoice</div>
-      <div style="font-size:9px;color:rgba(255,255,255,0.7);margin-top:2px">${d?.shops?.name || 'Phonefix'}</div>
+      <div style="font-size:9px;color:rgba(255,255,255,0.7);margin-top:2px">${d?.shops?.name || 'iPHIX Technologies'}</div>
     </div>
     <div class="inv-banner-meta">
       <div class="inv-banner-no">${d?.invoice_no}</div>
@@ -755,12 +755,12 @@ export default function InvoiceView({ invoice, onBack, isCashier = false, sessio
 
   <!-- Footer -->
   <div class="footer-band">
-    <div class="footer-thanks">✦ Thank You for Choosing Phonefix ✦</div>
+    <div class="footer-thanks">✦ Thank You for Choosing iPHIX Technologies ✦</div>
     <div class="footer-msg">
       We appreciate your trust and loyalty.<br>
       For queries, please contact us with your invoice number.
     </div>
-    <div class="footer-co">Designed for Phonefix (PVT) Ltd · Powered by Techmo Solutions</div>
+    <div class="footer-co">Designed for iPHIX Technologies · Powered by Techmo Solutions</div>
   </div>
 
   <script>window.onload=function(){window.print()}<\/script>
@@ -1079,7 +1079,7 @@ export default function InvoiceView({ invoice, onBack, isCashier = false, sessio
       if (details.customers?.phone) {
         const msg = smsTemplates.customerPaymentCollected(
           details.customers.name, payAmt, Math.max(0, newBalance),
-          details.shops?.name || 'Phonefix'
+          details.shops?.name || 'iPHIX Technologies'
         )
         sendSMS({ to: details.customers.phone, message: msg, triggeredBy: 'invoice_payment', referenceType: 'invoice', referenceId: invoice.id })
           .then(({ success }) => { if (success) toast.success('SMS sent to customer') })
@@ -1187,7 +1187,7 @@ export default function InvoiceView({ invoice, onBack, isCashier = false, sessio
     const fmt2 = n => parseFloat(n||0).toLocaleString('en-LK',{minimumFractionDigits:2})
     const dateStr2 = new Date(d?.created_at||Date.now()).toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric'})
     const timeStr2 = new Date(d?.created_at||Date.now()).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'})
-    const shopName2 = 'PHONEFIX (PVT) LTD'
+    const shopName2 = 'IPHIX TECHNOLOGIES'
     w.document.write(`<!DOCTYPE html><html><head><title>Receipt ${d?.invoice_no}</title>
     <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Arial',sans-serif;font-size:13px;font-weight:bold;width:75mm;margin:0 auto;padding:4px}.c{text-align:center}.b{font-weight:bold}.dashed{border-top:1px dashed #000;margin:4px 0}.solid{border-top:2px solid #000;margin:4px 0}.row{display:flex;justify-content:space-between;padding:1px 0;font-size:13px;font-weight:bold}.tot{display:flex;justify-content:space-between;font-weight:bold;font-size:16px;padding:3px 0}.bal{display:flex;justify-content:space-between;font-weight:bold;font-size:14px;padding:2px 0}@media print{@page{size:75mm auto;margin:1mm}}</style></head><body>
     <div class="c b" style="font-size:18px;font-weight:bold;letter-spacing:1px">${shopName2}</div>
@@ -1218,7 +1218,7 @@ export default function InvoiceView({ invoice, onBack, isCashier = false, sessio
     <div class="solid"></div>
     <div class="c b" style="font-size:13px;font-weight:bold;margin:3px 0">★ Thank You! Visit Again ★</div>
     <div class="c" style="font-size:11px;font-weight:bold">Your trust is our greatest reward.</div>
-    <div class="c" style="font-size:11px;font-weight:bold;margin-top:2px">Designed for Phonefix (PVT) Ltd · Powered by Techmo Solutions</div>
+    <div class="c" style="font-size:11px;font-weight:bold;margin-top:2px">Designed for iPHIX Technologies · Powered by Techmo Solutions</div>
     <script>window.onload=function(){window.print()}<\/script></body></html>`)
     w.document.close()
   }
@@ -1693,9 +1693,9 @@ export default function InvoiceView({ invoice, onBack, isCashier = false, sessio
           <div id="invoice-print" style={{ background: 'white', borderRadius: '12px', boxShadow: '0 1px 3px rgba(15,23,42,0.06), 0 1px 2px rgba(15,23,42,0.04)', overflow: 'hidden' }}>
             <div style={{ background: 'linear-gradient(135deg,#0b1220,#1e3a8a)', padding: '28px 32px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <img src="/phonefix-logo.png" alt="Phonefix" style={{ width: '40px', height: '40px', objectFit: 'contain', flexShrink: 0 }} />
+                <img src="/iphix-logo.png" alt="iPHIX Technologies" style={{ width: '40px', height: '40px', objectFit: 'contain', flexShrink: 0 }} />
                 <div>
-                  <div style={{ color: 'white', fontWeight: '800', fontSize: '18px' }}>Phonefix</div>
+                  <div style={{ color: 'white', fontWeight: '800', fontSize: '18px' }}>iPHIX Technologies</div>
                   <div style={{ color: '#94a3b8', fontSize: '12px' }}>{details.shops?.name}</div>
                 </div>
               </div>
@@ -1784,7 +1784,7 @@ export default function InvoiceView({ invoice, onBack, isCashier = false, sessio
               </div>
             )}
             <div style={{ padding: '14px 24px', borderTop: '1px solid #f1f5f9', textAlign: 'center', fontSize: '12px', color: '#94a3b8' }}>
-              Thank you for your business · Phonefix ERP
+              Thank you for your business · iPHIX Technologies ERP
             </div>
           </div>
         </div>

@@ -37,10 +37,10 @@ function App() {
   const [session, setSession] = useState(null)
   const [activeShop, setActiveShop] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [inRepairDivision, setInRepairDivision] = useState(() => localStorage.getItem('phonefix_in_repair_division') === 'true')
+  const [inRepairDivision, setInRepairDivision] = useState(() => localStorage.getItem('iphix_in_repair_division') === 'true')
 
   useEffect(() => {
-    localStorage.setItem('phonefix_in_repair_division', String(inRepairDivision))
+    localStorage.setItem('iphix_in_repair_division', String(inRepairDivision))
   }, [inRepairDivision])
 
   useEffect(() => {

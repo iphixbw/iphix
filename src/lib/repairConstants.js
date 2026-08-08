@@ -81,7 +81,7 @@ export function printJobReceipt(job, customer) {
 
   w.document.write(`<!DOCTYPE html><html><head><title>Repair Job ${job.job_no}</title>
   <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Arial',sans-serif;font-size:13px;font-weight:bold;width:75mm;margin:0 auto;padding:4px}.c{text-align:center}.b{font-weight:bold}.dashed{border-top:1px dashed #000;margin:4px 0}.solid{border-top:2px solid #000;margin:4px 0}.row{display:flex;justify-content:space-between;padding:1px 0;font-size:12px;font-weight:bold}@media print{@page{size:75mm auto;margin:1mm}}</style></head><body>
-  <div class="c b" style="font-size:18px;font-weight:bold;letter-spacing:1px">PHONEFIX (PVT) LTD</div>
+  <div class="c b" style="font-size:18px;font-weight:bold;letter-spacing:1px">IPHIX TECHNOLOGIES</div>
   <div class="c" style="font-size:10px">🔧 REPAIR JOB RECEIPT</div>
   <div class="dashed"></div>
   <div class="c b" style="font-size:16px;margin:3px 0">${job.job_no}</div>
@@ -106,10 +106,10 @@ export function printJobReceipt(job, customer) {
   ${job.estimated_completion ? `<div class="row"><span>Est. Ready Date</span><span>${new Date(job.estimated_completion).toLocaleDateString('en-GB')}</span></div>` : ''}
   <div class="solid"></div>
   <div class="c" style="font-size:11px;font-weight:bold;margin:4px 0">⚠ Please retain this receipt — required for device collection.</div>
-  <div class="c" style="font-size:10px;font-weight:normal">Phonefix is not responsible for data loss during repair. Uncollected devices after 7 days may be subject to a holding fee.</div>
+  <div class="c" style="font-size:10px;font-weight:normal">iPHIX Technologies is not responsible for data loss during repair. Uncollected devices after 7 days may be subject to a holding fee.</div>
   <div class="solid"></div>
   <div class="c b" style="font-size:13px;font-weight:bold;margin:3px 0">★ Thank You! ★</div>
-  <div class="c" style="font-size:11px;font-weight:bold;margin-top:2px">Designed for Phonefix (PVT) Ltd · Powered by Techmo Solutions</div>
+  <div class="c" style="font-size:11px;font-weight:bold;margin-top:2px">Designed for iPHIX Technologies · Powered by Techmo Solutions</div>
   <script>window.onload=function(){window.print()}<\/script></body></html>`)
   w.document.close()
 }
@@ -128,7 +128,7 @@ export function printJobPaymentReceipt(job, customer, paymentAmount, paymentMeth
 
   w.document.write(`<!DOCTYPE html><html><head><title>Payment Receipt ${job.job_no}</title>
   <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Arial',sans-serif;font-size:13px;font-weight:bold;width:75mm;margin:0 auto;padding:4px}.c{text-align:center}.b{font-weight:bold}.dashed{border-top:1px dashed #000;margin:4px 0}.solid{border-top:2px solid #000;margin:4px 0}.row{display:flex;justify-content:space-between;padding:1px 0;font-size:12px;font-weight:bold}.tot{display:flex;justify-content:space-between;font-weight:bold;font-size:15px;padding:3px 0}@media print{@page{size:75mm auto;margin:1mm}}</style></head><body>
-  <div class="c b" style="font-size:18px;font-weight:bold;letter-spacing:1px">PHONEFIX (PVT) LTD</div>
+  <div class="c b" style="font-size:18px;font-weight:bold;letter-spacing:1px">IPHIX TECHNOLOGIES</div>
   <div class="c" style="font-size:10px">🔧 REPAIR PAYMENT RECEIPT</div>
   <div class="dashed"></div>
   <div class="c b" style="font-size:16px;margin:3px 0">${job.job_no}</div>
@@ -146,7 +146,7 @@ export function printJobPaymentReceipt(job, customer, paymentAmount, paymentMeth
   <div class="row"><span>Balance Remaining</span><span>${fmt2(balanceAfter)}</span></div>
   <div class="dashed"></div>
   <div class="c b" style="font-size:13px;font-weight:bold;margin:3px 0">★ Thank You! ★</div>
-  <div class="c" style="font-size:11px;font-weight:bold;margin-top:2px">Designed for Phonefix (PVT) Ltd · Powered by Techmo Solutions</div>
+  <div class="c" style="font-size:11px;font-weight:bold;margin-top:2px">Designed for iPHIX Technologies · Powered by Techmo Solutions</div>
   <script>window.onload=function(){window.print()}<\/script></body></html>`)
   w.document.close()
 }
@@ -161,7 +161,7 @@ export function printPartsSaleReceipt(sale, items, customerName) {
 
   w.document.write(`<!DOCTYPE html><html><head><title>Receipt ${sale.sale_no}</title>
   <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Arial',sans-serif;font-size:13px;font-weight:bold;width:75mm;margin:0 auto;padding:4px}.c{text-align:center}.b{font-weight:bold}.dashed{border-top:1px dashed #000;margin:4px 0}.solid{border-top:2px solid #000;margin:4px 0}.row{display:flex;justify-content:space-between;padding:1px 0;font-size:12px;font-weight:bold}.tot{display:flex;justify-content:space-between;font-weight:bold;font-size:16px;padding:3px 0}@media print{@page{size:75mm auto;margin:1mm}}</style></head><body>
-  <div class="c b" style="font-size:18px;font-weight:bold;letter-spacing:1px">PHONEFIX (PVT) LTD</div>
+  <div class="c b" style="font-size:18px;font-weight:bold;letter-spacing:1px">IPHIX TECHNOLOGIES</div>
   <div class="c" style="font-size:10px">🔧 REPAIR PARTS SALE</div>
   <div class="dashed"></div>
   <div class="c b" style="font-size:16px;margin:3px 0">${sale.sale_no}</div>
@@ -179,7 +179,7 @@ export function printPartsSaleReceipt(sale, items, customerName) {
   ${balanceDue > 0 ? `<div class="row"><span>PAID</span><span>${fmt2(sale.amount_paid)}</span></div><div class="row b"><span>CREDIT DUE</span><span>${fmt2(balanceDue)}</span></div>` : `<div class="row"><span>PAID (${(sale.payment_method || '').toUpperCase()})</span><span>${fmt2(sale.amount_paid)}</span></div>`}
   <div class="dashed"></div>
   <div class="c b" style="font-size:13px;font-weight:bold;margin:3px 0">★ Thank You! ★</div>
-  <div class="c" style="font-size:11px;font-weight:bold;margin-top:2px">Designed for Phonefix (PVT) Ltd · Powered by Techmo Solutions</div>
+  <div class="c" style="font-size:11px;font-weight:bold;margin-top:2px">Designed for iPHIX Technologies · Powered by Techmo Solutions</div>
   <script>window.onload=function(){window.print()}<\/script></body></html>`)
   w.document.close()
 }

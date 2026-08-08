@@ -1,6 +1,6 @@
-# Phonefix ERP
+# iPHIX Technologies ERP
 
-Multi-shop retail management system for Phonefix — billing, inventory, purchasing,
+Multi-shop retail management system for iPHIX Technologies — billing, inventory, purchasing,
 suppliers, finance, HR, investor tracking, and SMS marketing.
 
 Built with React 19 + Vite + Supabase.

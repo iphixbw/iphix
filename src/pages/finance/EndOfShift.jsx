@@ -248,7 +248,7 @@ export default function EndOfShift({ activeShop, session, isSuperAdmin = false, 
   const fmt = n => parseFloat(n||0).toLocaleString('en-LK',{minimumFractionDigits:2})
 
   async function printShiftRecord(r) {
-    const shop = r.shops?.name || activeShop?.name || 'Phonefix'
+    const shop = r.shops?.name || activeShop?.name || 'iPHIX Technologies'
     const shiftDate = new Date(r.shift_date + 'T12:00:00').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
     const printedAt = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
     const d = r.difference || 0
@@ -276,7 +276,7 @@ export default function EndOfShift({ activeShop, session, isSuperAdmin = false, 
     <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#000;width:80mm;margin:0 auto;padding:4px}.c{text-align:center}.b{font-weight:bold}.r{text-align:right}.div{border-top:1px dashed #000;margin:4px 0}.divs{border-top:2px solid #000;margin:4px 0}.row{display:flex;justify-content:space-between;padding:2px 0;font-weight:bold}.header-band{background:#fff;color:#000;text-align:center;padding:8px 4px 6px;margin:-4px -4px 4px;border-bottom:2px solid #000}@media print{body{padding:0 0 60mm 0}@page{size:80mm auto;margin:1mm 1mm 0 1mm}}</style>
     </head><body>
     <div class="header-band">
-      <div style="font-size:16px;font-weight:900;letter-spacing:1px;color:#000">PHONEFIX (PVT) LTD</div>
+      <div style="font-size:16px;font-weight:900;letter-spacing:1px;color:#000">IPHIX TECHNOLOGIES</div>
       <div style="font-size:9px;letter-spacing:2px;color:#000;margin-top:2px;font-weight:900">YOUR TRUSTED TECHNOLOGY PARTNER</div>
     </div>
     <div class="c b" style="font-size:13px;letter-spacing:1px">END OF SHIFT REPORT</div>
@@ -311,7 +311,7 @@ export default function EndOfShift({ activeShop, session, isSuperAdmin = false, 
 
     <div class="divs"></div>
     <div class="c" style="font-size:10px">Reprinted at ${printedAt}</div>
-    <div class="c" style="font-size:9px;margin-top:3px">Designed for Phonefix (PVT) Ltd · Powered by Techmo Solutions</div>
+    <div class="c" style="font-size:9px;margin-top:3px">Designed for iPHIX Technologies · Powered by Techmo Solutions</div>
     <div style='height:60mm'></div><script>window.onload=function(){window.print()}<\/script>
     </body></html>`)
     w.document.close()
@@ -320,7 +320,7 @@ export default function EndOfShift({ activeShop, session, isSuperAdmin = false, 
   function printReport(actualAmt, diffAmt) {
     const w = window.open('','_blank')
     const now = new Date()
-    const shop = activeShop?.name || 'Phonefix'
+    const shop = activeShop?.name || 'iPHIX Technologies'
     const t = n => `<tr><td>${new Date(n.created_at).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</td>`
     const cashInvs = allInvoices.filter(i=>i.payment_method==='cash'||i.payment_method==='partial')
     const cardInvs = allInvoices.filter(i=>i.payment_method==='card')
@@ -335,7 +335,7 @@ export default function EndOfShift({ activeShop, session, isSuperAdmin = false, 
     <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;font-size:12px;font-weight:bold;color:#000;width:80mm;margin:0 auto;padding:4px}.c{text-align:center}.b{font-weight:bold}.r{text-align:right}.div{border-top:1px dashed #000;margin:4px 0}.divs{border-top:2px solid #000;margin:4px 0}table{width:100%;border-collapse:collapse}td,th{padding:2px 3px;font-size:11px;font-weight:bold;color:#000}th{font-weight:900;border-bottom:1.5px solid #000}.cr{color:#000;font-weight:900}.ok{color:#000;font-weight:900}.row{display:flex;justify-content:space-between;padding:2px 0;font-weight:bold}.sub td{font-size:10px;color:#000;padding:1px 3px;font-weight:600}.header-band{background:#fff;color:#000;text-align:center;padding:8px 4px 6px;margin:-4px -4px 4px;border-bottom:2px solid #000}@media print{body{padding:0 0 60mm 0}@page{size:80mm auto;margin:1mm 1mm 0 1mm}}</style>
     </head><body>
     <div class="header-band">
-      <div style="font-size:16px;font-weight:900;letter-spacing:1px;color:#000">PHONEFIX (PVT) LTD</div>
+      <div style="font-size:16px;font-weight:900;letter-spacing:1px;color:#000">IPHIX TECHNOLOGIES</div>
       <div style="font-size:9px;letter-spacing:2px;color:#000;margin-top:2px;font-weight:900">YOUR TRUSTED TECHNOLOGY PARTNER</div>
     </div>
     <div class="c b" style="font-size:13px;letter-spacing:1px">END OF SHIFT REPORT</div>
@@ -418,7 +418,7 @@ export default function EndOfShift({ activeShop, session, isSuperAdmin = false, 
     ${notes?`<div class="div"></div><div class="row"><span>Notes: ${notes}</span></div>`:''}
     <div class="divs"></div>
     <div class="c" style="font-size:11px">Closed at ${now.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</div>
-    <div class="c" style="font-size:9px;margin-top:3px">Designed for Phonefix (PVT) Ltd · Powered by Techmo Solutions</div>
+    <div class="c" style="font-size:9px;margin-top:3px">Designed for iPHIX Technologies · Powered by Techmo Solutions</div>
     <div style='height:60mm'></div><script>window.onload=function(){window.print()}<\/script>
     </body></html>`)
     w.document.close()

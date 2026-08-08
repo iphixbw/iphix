@@ -14,7 +14,7 @@
 // Stored in localStorage so the calibration persists across prints.
 // Use printCalibrationLabels() to print a test sheet while tuning this.
 
-const OFFSET_KEY = 'phonefix_barcode_print_offset'
+const OFFSET_KEY = 'iphix_barcode_print_offset'
 
 export function getPrintOffset() {
   try {
@@ -86,11 +86,11 @@ export function printBarcodeLabels(items) {
   const offset = getPrintOffset()
 
   const printWindow = window.open('', '_blank')
-  printWindow.document.write(`<!DOCTYPE html><html><head><title>Barcode Labels — Phonefix</title>
+  printWindow.document.write(`<!DOCTYPE html><html><head><title>Barcode Labels — iPHIX Technologies</title>
   <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"><\/script>
   <style>${labelStyles(offset)}</style></head><body>
   <div class="no-print" style="font-family:Arial;font-size:13px;padding:10px 12px;color:#333;background:#f8fafc;border-bottom:1px solid #ddd;">
-    <strong>Phonefix</strong> — ${expanded.length} barcode label${expanded.length !== 1 ? 's' : ''} · Zebra ZD230 · 100mm roll, 3-up 30×20mm labels
+    <strong>iPHIX Technologies</strong> — ${expanded.length} barcode label${expanded.length !== 1 ? 's' : ''} · Zebra ZD230 · 100mm roll, 3-up 30×20mm labels
     ${(offset.x !== 0 || offset.y !== 0) ? `<span style="color:#2563eb;"> · offset applied: x=${offset.x}mm, y=${offset.y}mm</span>` : ''}
     ${skippedCount > 0 ? `<div style="color:#e11d48;margin-top:4px;">${skippedCount} item(s) skipped — no barcode set</div>` : ''}
   </div>
@@ -132,13 +132,13 @@ export function printBarcodeLabels(items) {
 export function printCalibrationLabels() {
   const offset = getPrintOffset()
   const printWindow = window.open('', '_blank')
-  printWindow.document.write(`<!DOCTYPE html><html><head><title>Barcode Print Calibration — Phonefix</title>
+  printWindow.document.write(`<!DOCTYPE html><html><head><title>Barcode Print Calibration — iPHIX Technologies</title>
   <style>${labelStyles(offset)}
     .label { border: 1px solid #000 !important; justify-content: space-between !important; }
     .corner { font-size: 6px; }
   </style></head><body>
   <div class="no-print" style="font-family:Arial;font-size:13px;padding:10px 12px;color:#333;background:#f8fafc;border-bottom:1px solid #ddd;">
-    <strong>Phonefix</strong> — Calibration sheet · current offset: x=${offset.x}mm, y=${offset.y}mm<br/>
+    <strong>iPHIX Technologies</strong> — Calibration sheet · current offset: x=${offset.x}mm, y=${offset.y}mm<br/>
     <span style="font-size:12px;color:#666;">Each box should exactly match one physical label, border touching all 4 edges. If not, adjust the offset in Print Barcode Labels → Calibrate Alignment.</span>
   </div>
   <div class="sheet">

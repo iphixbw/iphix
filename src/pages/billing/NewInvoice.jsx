@@ -522,7 +522,7 @@ export default function NewInvoice({ onBack, activeShop, isCashier = false, sess
 
         // Auto-send SMS if customer has a phone number and is NOT a cash customer
         if (selectedCustomer.phone && !isCashCustomer) {
-          const shopName = selectedShop?.name || 'Phonefix'
+          const shopName = selectedShop?.name || 'iPHIX Technologies'
           // newBalance already fetched above
           const message = newBalance > 0
             ? smsTemplates.invoiceWithOutstanding(selectedCustomer.name, newInvoiceNo, total, newBalance, shopName)
@@ -561,7 +561,7 @@ export default function NewInvoice({ onBack, activeShop, isCashier = false, sess
     const d = inv
     const dateStr = new Date(d?.created_at||Date.now()).toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric'})
     const timeStr = new Date(d?.created_at||Date.now()).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'})
-    const shopName = 'PHONEFIX (PVT) LTD'
+    const shopName = 'IPHIX TECHNOLOGIES'
     const shopAddress = d?.shops?.address || 'BANDARAWELA'
     const shopPhone = d?.shops?.phone || ''
     w.document.write(`<!DOCTYPE html><html><head><title>POS ${d?.invoice_no}</title>
@@ -594,7 +594,7 @@ export default function NewInvoice({ onBack, activeShop, isCashier = false, sess
     <div class="solid"></div>
     <div class="c b" style="font-size:13px;margin:3px 0">★ Thank You! Visit Again ★</div>
     <div class="c" style="font-size:11px;font-weight:bold">Your trust is our greatest reward.</div>
-    <div class="c" style="font-size:11px;font-weight:bold;margin-top:2px">Designed for Phonefix (PVT) Ltd · Powered by Techmo Solutions</div>
+    <div class="c" style="font-size:11px;font-weight:bold;margin-top:2px">Designed for iPHIX Technologies · Powered by Techmo Solutions</div>
     <div style=\'height:60mm\'></div><script>window.onload=function(){window.print()}<\/script></body></html>`)
     w.document.close()
   }
@@ -605,7 +605,7 @@ export default function NewInvoice({ onBack, activeShop, isCashier = false, sess
     const d = inv
     w.document.write(`<!DOCTYPE html><html><head><title>Invoice ${d?.invoice_no}</title>
     <style>body{font-family:Arial,sans-serif;font-size:13px;padding:20px;max-width:148mm;margin:0 auto}h1{font-size:18px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin:12px 0}th{background:#f1f5f9;padding:8px;text-align:left;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e2e8f0}td{padding:7px 8px;border-bottom:1px solid #f1f5f9;font-size:13px}.tot{font-weight:bold;font-size:15px}.due{color:#dc2626;font-weight:bold}@media print{@page{size:A5;margin:10mm}}</style></head><body>
-    <h1>${d?.shops?.name||'Phonefix'}</h1>
+    <h1>${d?.shops?.name||'iPHIX Technologies'}</h1>
     <p style="color:#64748b;margin:0 0 12px">${new Date(d?.created_at||Date.now()).toLocaleDateString('en-GB',{day:'2-digit',month:'long',year:'numeric'})}</p>
     <div style="display:flex;justify-content:space-between;margin-bottom:12px">
       <div><strong>Invoice:</strong> ${d?.invoice_no}<br><strong>Customer:</strong> ${d?.customers?.name||'Cash Customer'}</div>

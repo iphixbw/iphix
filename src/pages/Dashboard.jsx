@@ -32,7 +32,7 @@ import HRModule from './hr/HRModule'
 export default function Dashboard({ session, activeShop, isSuperAdmin, onShopChange, onEnterRepairDivision }) {
   const [loggingOut, setLoggingOut] = useState(false)
   const [activePage, setActivePage] = useState(() => {
-    const saved = localStorage.getItem('phonefix_active_page')
+    const saved = localStorage.getItem('iphix_active_page')
     // Don't restore transient pages that require context
     const transient = ['new_invoice', 'view_invoice', 'new_purchase', 'finance_invoice_pl']
     if (!saved || transient.includes(saved)) return 'dashboard'
@@ -63,9 +63,9 @@ export default function Dashboard({ session, activeShop, isSuperAdmin, onShopCha
         // Validate restored page against role — cashiers can't access admin-only pages
         if (role === 'cashier') {
           const cashierPages = ['billing', 'new_invoice', 'view_invoice', 'customers', 'items', 'returns', 'stock', 'expenses', 'endshift']
-          const saved = localStorage.getItem('phonefix_active_page')
+          const saved = localStorage.getItem('iphix_active_page')
           if (!saved || !cashierPages.includes(saved)) {
-            localStorage.setItem('phonefix_active_page', 'billing')
+            localStorage.setItem('iphix_active_page', 'billing')
             setActivePage('billing')
           }
         }
@@ -173,13 +173,13 @@ export default function Dashboard({ session, activeShop, isSuperAdmin, onShopCha
   }
 
   function navigateTo(page) {
-    localStorage.setItem('phonefix_active_page', page)
+    localStorage.setItem('iphix_active_page', page)
     setActivePage(page)
   }
 
   const handleLogout = async () => {
     setLoggingOut(true)
-    localStorage.removeItem('phonefix_active_page')
+    localStorage.removeItem('iphix_active_page')
     await supabase.auth.signOut()
   }
 
@@ -296,7 +296,7 @@ export default function Dashboard({ session, activeShop, isSuperAdmin, onShopCha
                 Good {new Date().getHours() < 12 ? 'Morning' : new Date().getHours() < 17 ? 'Afternoon' : 'Evening'} 👋
               </h1>
               <p style={{ color: '#93a5c9', fontSize: '14px', margin: 0, position: 'relative' }}>
-                Here's what's happening at Phonefix today.
+                Here's what's happening at iPHIX Technologies today.
               </p>
             </div>
 
@@ -593,7 +593,7 @@ export default function Dashboard({ session, activeShop, isSuperAdmin, onShopCha
           <div style={{ display: 'flex', alignItems: 'center', gap: '11px' }}>
             <Logo size={36} radius={10} />
             <div>
-              <div style={{ color: 'white', fontWeight: '700', fontSize: '15px', letterSpacing: '-0.01em' }}>Phonefix</div>
+              <div style={{ color: 'white', fontWeight: '700', fontSize: '15px', letterSpacing: '-0.01em' }}>iPHIX Technologies</div>
               <div style={{ color: '#7d9be0', fontSize: '11px', fontWeight: '500' }}>ERP System</div>
             </div>
           </div>

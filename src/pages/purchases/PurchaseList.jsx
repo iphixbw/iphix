@@ -92,7 +92,7 @@ export default function PurchaseList({ onNewPurchase }) {
       if (payingPurchase.suppliers?.phone) {
         const msg = smsTemplates.supplierPaymentMade(
           payingPurchase.suppliers.name, payAmt, Math.max(0, newOutstanding),
-          'Phonefix'
+          'iPHIX Technologies'
         )
         sendSMS({ to: payingPurchase.suppliers.phone, message: msg, triggeredBy: 'purchase_payment', referenceType: 'purchase', referenceId: payingPurchase.id })
           .then(({ success }) => { if (success) toast.success('SMS sent to supplier') })

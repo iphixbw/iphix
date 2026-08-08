@@ -54,8 +54,8 @@ export default function OpeningBalances({ session, shops = [], isSuperAdmin = fa
   useEffect(() => { if (shops?.length > 0 && !inventoryShopId) setInventoryShopId(shops[0].id) }, [shops])
   useEffect(() => {
     if (shops?.length > 0 && !shopPriceShopId) {
-      // Default to first non-Phonefix shop (retail shop)
-      const retail = shops.find(s => s.name !== 'Phonefix') || shops[0]
+      // Default to first non-iPHIX Technologies shop (retail shop)
+      const retail = shops.find(s => s.name !== 'iPHIX Technologies') || shops[0]
       setShopPriceShopId(retail.id)
     }
   }, [shops])
@@ -1143,7 +1143,7 @@ export default function OpeningBalances({ session, shops = [], isSuperAdmin = fa
         <div style={{ background: 'white', borderRadius: '12px', boxShadow: '0 1px 3px rgba(15,23,42,0.06), 0 1px 2px rgba(15,23,42,0.04)', overflow: 'hidden' }}>
           <div style={{ padding: '16px 20px', borderBottom: '1px solid #f1f5f9' }}>
             <h2 style={{ fontSize: '15px', fontWeight: '700', color: '#0f172a', margin: '0 0 4px' }}>Shop Retail Prices</h2>
-            <p style={{ fontSize: '13px', color: '#64748b', margin: 0 }}>Upload per-shop selling price and minimum (last) price for retail stores. Phonefix shop uses the default item prices.</p>
+            <p style={{ fontSize: '13px', color: '#64748b', margin: 0 }}>Upload per-shop selling price and minimum (last) price for retail stores. iPHIX Technologies shop uses the default item prices.</p>
           </div>
           <div style={{ padding: '16px 20px', borderBottom: '1px solid #f1f5f9', background: '#f8fafc' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap', marginBottom: '12px' }}>
@@ -1151,7 +1151,7 @@ export default function OpeningBalances({ session, shops = [], isSuperAdmin = fa
                 <label style={{ fontSize: '12px', fontWeight: '700', color: '#64748b', marginRight: '8px' }}>Shop:</label>
                 <select value={shopPriceShopId} onChange={e => setShopPriceShopId(e.target.value)}
                   style={{ padding: '7px 12px', border: '1.5px solid #e2e8f0', borderRadius: '7px', fontSize: '13px', fontWeight: '600' }}>
-                  {shops.filter(s => s.name !== 'Phonefix').map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  {shops.filter(s => s.name !== 'iPHIX Technologies').map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
               </div>
               <div>

@@ -159,7 +159,7 @@ export default function FinanceReport({ shops, onBack, onViewInvoice, startTab =
 
     const netColor = (pl.netProfit||0) >= 0 ? '#4ade80' : '#fca5a5'
     const html = '<!DOCTYPE html><html><head><title>Finance Report</title><style>' + styles + '</style></head><body>' +
-      '<div class="hdr"><div class="co">PHONEFIX (PVT) LTD</div><div class="ttl">Finance Report — Profit & Loss</div><div class="sub">' + dateFrom + ' to ' + dateTo + ' &nbsp;·&nbsp; Generated ' + dateStr + '</div></div>' +
+      '<div class="hdr"><div class="co">IPHIX TECHNOLOGIES</div><div class="ttl">Finance Report — Profit & Loss</div><div class="sub">' + dateFrom + ' to ' + dateTo + ' &nbsp;·&nbsp; Generated ' + dateStr + '</div></div>' +
       '<div class="pl-section">' +
         '<div class="pl-row"><span style="font-weight:700">Total Revenue</span><span style="color:#059669;font-weight:800">LKR ' + fmt(pl.totalRevenue) + '</span></div>' +
         '<div class="pl-row"><span>Cost of Goods Sold (COGS)</span><span style="color:#e11d48">LKR ' + fmt(pl.totalCOGS) + '</span></div>' +
@@ -173,7 +173,7 @@ export default function FinanceReport({ shops, onBack, onViewInvoice, startTab =
       '<div class="pl-total"><span>NET PROFIT</span><span style="color:' + netColor + '">LKR ' + fmt(pl.netProfit) + ' (' + (pl.netMargin||0).toFixed(1) + '%)</span></div>' +
       shopSection +
       expSection +
-      '<div class="ftr">Designed for Phonefix (PVT) Ltd &nbsp;·&nbsp; Powered by Techmo Solutions &nbsp;·&nbsp; ' + dateStr + '</div>' +
+      '<div class="ftr">Designed for iPHIX Technologies &nbsp;·&nbsp; Powered by Techmo Solutions &nbsp;·&nbsp; ' + dateStr + '</div>' +
       '<script>window.onload=function(){window.print()}<\/script>' +
       '</body></html>'
 

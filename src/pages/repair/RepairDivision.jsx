@@ -37,12 +37,12 @@ const MENU = [
 ]
 
 export default function RepairDivision({ session, activeShop, isSuperAdmin, onExit }) {
-  const [activePage, setActivePage] = useState(() => localStorage.getItem('phonefix_repair_active_page') || 'dashboard')
+  const [activePage, setActivePage] = useState(() => localStorage.getItem('iphix_repair_active_page') || 'dashboard')
   const [selectedJobId, setSelectedJobId] = useState(null)
   const [loggingOut, setLoggingOut] = useState(false)
 
   useEffect(() => {
-    localStorage.setItem('phonefix_repair_active_page', activePage)
+    localStorage.setItem('iphix_repair_active_page', activePage)
   }, [activePage])
 
   function navigateTo(page) {
@@ -92,7 +92,7 @@ export default function RepairDivision({ session, activeShop, isSuperAdmin, onEx
           <div style={{ display: 'flex', alignItems: 'center', gap: '11px' }}>
             <Logo size={36} />
             <div>
-              <div style={{ color: 'white', fontWeight: '700', fontSize: '15px', letterSpacing: '-0.01em' }}>Phonefix</div>
+              <div style={{ color: 'white', fontWeight: '700', fontSize: '15px', letterSpacing: '-0.01em' }}>iPHIX Technologies</div>
               <div style={{ color: '#f0b23d', fontSize: '11px', fontWeight: '700', letterSpacing: '0.04em' }}>🔧 REPAIR DIVISION</div>
             </div>
           </div>

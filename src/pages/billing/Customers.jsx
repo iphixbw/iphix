@@ -420,7 +420,7 @@ export default function Customers({ activeShop, isSuperAdmin }) {
       if (selectedCustomer.phone) {
         const msg = smsTemplates.customerPaymentCollected(
           selectedCustomer.name, applied, Math.max(0, newBalance),
-          activeShop?.name || 'Phonefix'
+          activeShop?.name || 'iPHIX Technologies'
         )
         sendSMS({ to: selectedCustomer.phone, message: msg, triggeredBy: 'customer_payment', referenceType: 'customer', referenceId: selectedCustomer.id })
           .then(({ success }) => { if (success) toast.success('SMS sent to customer') })

@@ -376,7 +376,7 @@ export default function NewPurchase({ onBack, activeShop, isCashier = false }) {
         const newOutstanding = updatedSupplier?.outstanding_balance || 0
         const message = smsTemplates.purchaseConfirmed(
           selectedSupplier.name, newPurchaseNo, subtotal, newOutstanding,
-          selectedShop?.name || 'Phonefix'
+          selectedShop?.name || 'iPHIX Technologies'
         )
         sendSMS({
           to: selectedSupplier.phone,

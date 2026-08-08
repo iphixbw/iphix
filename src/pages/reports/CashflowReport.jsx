@@ -159,7 +159,7 @@ export default function CashflowReport() {
     const html = `<!DOCTYPE html><html><head><title>Cashflow Report</title>
     <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;font-size:11px;color:#1e293b;padding:16px}.hdr{border-bottom:3px solid #1e40af;padding-bottom:10px;margin-bottom:14px}.co{font-size:19px;font-weight:900;color:#1e40af}.ttl{font-size:14px;font-weight:700;margin-top:3px}.sub{font-size:10px;color:#64748b;margin-top:2px}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}.card{border:1.5px solid #e2e8f0;border-radius:6px;padding:10px 12px}.lbl{font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:3px}.val{font-size:14px;font-weight:800}.net{padding:14px 20px;border-radius:8px;display:flex;justify-content:space-between;align-items:center;margin-top:14px}.ftr{margin-top:14px;border-top:2px solid #e2e8f0;padding-top:8px;text-align:center;font-size:9px;color:#94a3b8;font-weight:700}@media print{@page{size:A4 portrait;margin:8mm}body{padding:0}}</style>
     </head><body>
-    <div class="hdr"><div class="co">PHONEFIX (PVT) LTD</div><div class="ttl">Cashflow Report</div><div class="sub">${dateFrom} to ${dateTo} &nbsp;·&nbsp; ${shopName} &nbsp;·&nbsp; Generated ${dateStr}</div></div>
+    <div class="hdr"><div class="co">IPHIX TECHNOLOGIES</div><div class="ttl">Cashflow Report</div><div class="sub">${dateFrom} to ${dateTo} &nbsp;·&nbsp; ${shopName} &nbsp;·&nbsp; Generated ${dateStr}</div></div>
     <div class="summary">
       <div class="card"><div class="lbl">Cash Sales</div><div class="val" style="color:#059669">LKR ${fmt(totalCashIn)}</div><div style="font-size:9px;color:#94a3b8">${cashSales.length} invoices</div></div>
       <div class="card"><div class="lbl">Card Sales</div><div class="val" style="color:#0891b2">LKR ${fmt(totalCardIn)}</div><div style="font-size:9px;color:#94a3b8">${cardSales.length} invoices</div></div>
@@ -183,7 +183,7 @@ export default function CashflowReport() {
       <div><div style="font-size:12px;color:white;opacity:.85">Net Cash Position</div><div style="font-size:10px;color:white;opacity:.7">${dateFrom} → ${dateTo} · ${shopName}</div></div>
       <div style="font-size:22px;font-weight:900;color:white">${netCash>=0?'+':''}LKR ${fmt(netCash)}</div>
     </div>
-    <div class="ftr">Designed for Phonefix (PVT) Ltd &nbsp;·&nbsp; Powered by Techmo Solutions &nbsp;·&nbsp; ${dateStr}</div>
+    <div class="ftr">Designed for iPHIX Technologies &nbsp;·&nbsp; Powered by Techmo Solutions &nbsp;·&nbsp; ${dateStr}</div>
     <script>window.onload=function(){window.print()}<\/script></body></html>`
 
     w.document.write(html)

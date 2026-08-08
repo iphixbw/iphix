@@ -70,38 +70,48 @@ export default function RepairThirdParty({ shop }) {
       const referenceLabel = itemsToPay.length === 1 ? itemsToPay[0].item_name : `${itemsToPay.length} items`
       const supplierLabel = itemsToPay[0]?.supplier_name || ''
 
-      for (const item of itemsToPay) {
-        await supabase.from('repair_third_party_items').update({
-          payment_status: 'paid', payment_method: method, paid_at: new Date().toISOString(),
-        }).eq('id', item.id)
-      }
+      // For bank/cheque methods, the transaction is inserted first so every item
+      // settled in this batch can be linked to it — that link is what lets a later
+      // cheque return (in Bank.jsx) find and reverse exactly these items.
+      let bankTransactionId = null
 
       if (totalAmount > 0) {
-        if (method === 'cash') {
-          await supabase.from('repair_cash_ledger').insert({
-            shop_id: shop?.id || null, type: 'payment', amount: -totalAmount,
-            reference: supplierLabel || referenceLabel,
-            notes: `3rd-party settlement — ${referenceLabel}`,
-          })
-        } else if (method === 'bank' && bankAccountId) {
+        if (method === 'bank' && bankAccountId) {
           const bank = bankAccounts.find(b => b.id === bankAccountId)
           await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) - totalAmount }).eq('id', bankAccountId)
-          await supabase.from('bank_transactions').insert({
+          const { data: btx } = await supabase.from('bank_transactions').insert({
             bank_account_id: bankAccountId, type: 'withdrawal', amount: totalAmount,
             reference: `3rd-party settlement${supplierLabel ? `: ${supplierLabel}` : ''}`,
             notes: referenceLabel,
-          })
+          }).select().single()
+          bankTransactionId = btx?.id || null
         } else if (method === 'cheque' && bankAccountId) {
           // Cheque out — recorded pending, same as the ERP retail/supplier cheque flow,
           // using the same shared bank_accounts table so this shows up alongside
           // retail's own cheques in Bank > Cheques Due until presented/returned.
-          await supabase.from('bank_transactions').insert({
+          const { data: btx } = await supabase.from('bank_transactions').insert({
             bank_account_id: bankAccountId, type: 'cheque_out', amount: totalAmount,
             cheque_no: chequeNo || null, cheque_date: chequeDate || null, cheque_status: 'pending',
             reference: `3rd-party settlement${supplierLabel ? `: ${supplierLabel}` : ''}`,
             notes: referenceLabel,
-          })
+          }).select().single()
+          bankTransactionId = btx?.id || null
         }
+      }
+
+      for (const item of itemsToPay) {
+        await supabase.from('repair_third_party_items').update({
+          payment_status: 'paid', payment_method: method, paid_at: new Date().toISOString(),
+          bank_transaction_id: bankTransactionId,
+        }).eq('id', item.id)
+      }
+
+      if (totalAmount > 0 && method === 'cash') {
+        await supabase.from('repair_cash_ledger').insert({
+          shop_id: shop?.id || null, type: 'payment', amount: -totalAmount,
+          reference: supplierLabel || referenceLabel,
+          notes: `3rd-party settlement — ${referenceLabel}`,
+        })
       }
 
       for (const jobId of jobsInvolved) await recalcJobFinancials(jobId)
@@ -215,7 +225,7 @@ export default function RepairThirdParty({ shop }) {
 }
 
 // Settles one or several 3rd-party items in a single payment action — cash, a
-// Phonefix bank account transfer, or a cheque (recorded pending, same as the
+// iPHIX Technologies bank account transfer, or a cheque (recorded pending, same as the
 // ERP retail/supplier cheque flow).
 function SettleModal({ items, bankAccounts, onClose, onConfirm }) {
   const [method, setMethod] = useState('cash')

@@ -116,7 +116,17 @@ export default function RepairWarrantyClaims({ shop }) {
     if (!window.confirm(`Void claim ${claim.claim_no}? This will restore the replacement part's stock, if one was used.`)) return
     try {
       if (claim.replacement_part_id) {
+        // repair_add_part_stock alone only bumps the cached current_stock count —
+        // it doesn't touch repair_part_batches, which is what FIFO valuation and
+        // job costing actually draw from. Without a matching batch, this part's
+        // stock count and its real FIFO value silently drift apart, same as a
+        // purchase or opening-balance entry that skipped creating one.
+        const { data: part } = await supabase.from('repair_parts').select('average_cost, purchase_price').eq('id', claim.replacement_part_id).single()
+        const unitCost = part?.average_cost || part?.purchase_price || 0
         await supabase.rpc('repair_add_part_stock', { p_part_id: claim.replacement_part_id, p_quantity: claim.quantity })
+        if (unitCost > 0) {
+          await supabase.rpc('repair_fifo_add_batch', { p_part_id: claim.replacement_part_id, p_purchase_id: null, p_quantity: claim.quantity, p_unit_cost: unitCost })
+        }
       }
       await supabase.from('warranty_claims').update({ status: 'voided' }).eq('id', claim.id)
       toast.success('Claim voided')

@@ -26,7 +26,7 @@ export default function Expenses({ activeShop, session }) {
   useEffect(() => {
     // Load custom categories if saved in settings, otherwise use defaults
     supabase.from('shops').select('id').limit(1).then(() => {
-      const saved = localStorage.getItem('phonefix_expense_categories')
+      const saved = localStorage.getItem('iphix_expense_categories')
       if (saved) { try { setCategories(JSON.parse(saved)) } catch { setCategories(DEFAULT_CATEGORIES) } }
     })
     fetchData()

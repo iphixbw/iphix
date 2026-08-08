@@ -4,7 +4,7 @@
  *
  * Required environment variables — set in Netlify dashboard:
  *   TEXTLK_API_TOKEN  — your API Token from text.lk profile page
- *   TEXTLK_SENDER_ID  — your approved Sender ID (e.g. "Phonefix")
+ *   TEXTLK_SENDER_ID  — your approved Sender ID (e.g. "iPHIX Technologies")
  *
  * text.lk HTTP API endpoint: https://app.text.lk/api/v3/sms/send
  * Docs: https://text.lk/docs/send-sms/
