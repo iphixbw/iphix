@@ -50,7 +50,7 @@ export default function RepairCustomers({ shop, onOpenJob }) {
     events.sort((a, b) => new Date(a.date) - new Date(b.date))
     let running = 0
     events.forEach(e => { running += e.debit - e.credit; e.balance = running })
-    setStatement(events.reverse())
+    setStatement(events)
   }
 
   const filtered = customers.filter(c =>
@@ -130,7 +130,7 @@ export default function RepairCustomers({ shop, onOpenJob }) {
               </div>
             </div>
 
-            {outstanding > 0 && (
+            {(outstanding > 0 || selected.outstanding_balance > 0) && (
               <button onClick={() => setShowReceivePayment(true)}
                 style={{ width: '100%', marginBottom: '14px', padding: '10px', background: 'linear-gradient(135deg,#f0b23d,#d4881f)', color: '#1c1917', border: 'none', borderRadius: '9px', cursor: 'pointer', fontWeight: '800', fontSize: '13px' }}>
                 💵 Receive Payment
@@ -234,11 +234,12 @@ function ReceivePaymentModal({ shop, customer, jobs, sales, onClose, onPaid }) {
   const totalDue = outstandingItems.reduce((s, i) => s + i.due, 0)
 
   async function handlePay() {
-    let remaining = parseFloat(amount)
-    if (!remaining || remaining <= 0) return toast.error('Enter a valid amount')
+    const enteredAmount = parseFloat(amount)
+    if (!enteredAmount || enteredAmount <= 0) return toast.error('Enter a valid amount')
     if ((method === 'card' || method === 'bank') && !bankAccountId) return toast.error('Select a bank account')
     setSaving(true)
     try {
+      let remaining = enteredAmount
       const applied = []
       for (const item of outstandingItems) {
         if (remaining <= 0) break
@@ -254,21 +255,23 @@ function ReceivePaymentModal({ shop, customer, jobs, sales, onClose, onPaid }) {
         remaining -= take
       }
 
-      const totalApplied = parseFloat(amount) - Math.max(0, remaining)
+      // The FULL entered amount is what was actually received — even if it's
+      // more than specific jobs/sales here could absorb (paying down an
+      // opening balance with no linked job, or a per-job balance that hasn't
+      // self-corrected since it was last opened). Crediting only the itemized
+      // portion silently dropped the rest — sometimes recording a payment of
+      // LKR 0 even though real money came in.
+      await supabase.rpc('repair_adjust_customer_balance', { p_customer_id: customer.id, p_delta: -enteredAmount })
 
-      // Reduce the customer's outstanding balance by what was actually applied
-      await supabase.rpc('repair_adjust_customer_balance', { p_customer_id: customer.id, p_delta: -totalApplied })
-
-      // Record the payment in cash/bank
       if (method === 'cash') {
-        await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'sale', amount: totalApplied, reference: customer.name, notes: 'Customer payment received' })
+        await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'sale', amount: enteredAmount, reference: customer.name, notes: 'Customer payment received' })
       } else {
         const bank = bankAccounts.find(b => b.id === bankAccountId)
-        await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) + totalApplied }).eq('id', bankAccountId)
-        await supabase.from('bank_transactions').insert({ bank_account_id: bankAccountId, type: 'deposit', amount: totalApplied, reference: `Customer payment: ${customer.name}`, notes: `${method} payment` })
+        await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) + enteredAmount }).eq('id', bankAccountId)
+        await supabase.from('bank_transactions').insert({ bank_account_id: bankAccountId, type: 'deposit', amount: enteredAmount, reference: `Customer payment: ${customer.name}`, notes: `${method} payment` })
       }
 
-      toast.success(`${formatLKR(totalApplied)} applied across ${applied.length} item${applied.length !== 1 ? 's' : ''} (oldest first)`)
+      toast.success(`${formatLKR(enteredAmount)} received${applied.length ? ` — applied across ${applied.length} item${applied.length !== 1 ? 's' : ''} (oldest first)` : ''}`)
       onPaid()
     } catch (e) { toast.error('Failed: ' + e.message) }
     setSaving(false)
@@ -278,9 +281,14 @@ function ReceivePaymentModal({ shop, customer, jobs, sales, onClose, onPaid }) {
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: '20px' }}>
-      <div style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '420px', maxHeight: '85vh', overflowY: 'auto' }}>
+      <div style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '100%', maxWidth: '420px', maxHeight: '85vh', overflowY: 'auto' }}>
         <h3 style={{ fontSize: '16px', fontWeight: '800', margin: '0 0 4px', color: '#1c1917' }}>Receive Payment — {customer.name}</h3>
-        <p style={{ fontSize: '12px', color: '#8a7a63', margin: '0 0 14px' }}>Total outstanding: {formatLKR(totalDue)}</p>
+        <p style={{ fontSize: '12px', color: '#8a7a63', margin: '0 0 4px' }}>Total outstanding: {formatLKR(Math.max(totalDue, customer.outstanding_balance || 0))}</p>
+        {(customer.outstanding_balance || 0) > totalDue && (
+          <p style={{ fontSize: '11px', color: '#a89478', margin: '0 0 14px', fontStyle: 'italic' }}>
+            {formatLKR((customer.outstanding_balance || 0) - totalDue)} of this isn't tied to a specific job/sale below (e.g. an opening balance) — it'll still be applied when you record a payment.
+          </p>
+        )}
 
         <div style={{ background: '#fdf8f3', borderRadius: '8px', padding: '10px 12px', marginBottom: '14px', maxHeight: '140px', overflowY: 'auto' }}>
           <div style={{ fontSize: '10px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase', marginBottom: '6px' }}>Applied oldest-first</div>
@@ -292,7 +300,7 @@ function ReceivePaymentModal({ shop, customer, jobs, sales, onClose, onPaid }) {
           ))}
         </div>
 
-        <div style={{ marginBottom: '10px' }}><label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478' }}>Amount</label><input type="number" style={inp} value={amount} onChange={e => setAmount(e.target.value)} placeholder={String(totalDue)} /></div>
+        <div style={{ marginBottom: '10px' }}><label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478' }}>Amount</label><input type="number" style={inp} value={amount} onChange={e => setAmount(e.target.value)} placeholder={String(Math.max(totalDue, customer.outstanding_balance || 0))} /></div>
         <div style={{ marginBottom: '10px' }}>
           <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478' }}>Method</label>
           <select style={inp} value={method} onChange={e => setMethod(e.target.value)}>

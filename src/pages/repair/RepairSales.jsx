@@ -10,6 +10,7 @@ export default function RepairSales({ shop }) {
   const [sales, setSales] = useState([])
   const [loading, setLoading] = useState(true)
   const [showNew, setShowNew] = useState(false)
+  const [payingSale, setPayingSale] = useState(null)
 
   useEffect(() => { fetchSales() }, [shop?.id])
 
@@ -59,7 +60,12 @@ export default function RepairSales({ shop }) {
                   <td style={{ padding: '11px 14px', fontWeight: '700', color: (s.total - s.amount_paid) > 0 ? '#e11d48' : '#94a3b8' }}>{formatLKR(s.total - s.amount_paid)}</td>
                   <td style={{ padding: '11px 14px', fontSize: '12px', textTransform: 'capitalize' }}>{s.payment_method}</td>
                   <td style={{ padding: '11px 14px' }}><span style={{ padding: '3px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: '700', background: '#f0fdf4', color: '#166534' }}>{s.status}</span></td>
-                  <td style={{ padding: '11px 14px' }}>
+                  <td style={{ padding: '11px 14px', display: 'flex', gap: '6px' }}>
+                    {(s.total - s.amount_paid) > 0 && s.customer_id && (
+                      <button onClick={() => setPayingSale(s)} style={{ padding: '4px 10px', background: '#f0fdf4', color: '#059669', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: '700' }}>
+                        💵 Pay
+                      </button>
+                    )}
                     <button onClick={() => reprintReceipt(s)} style={{ padding: '4px 10px', background: '#fef3e2', color: '#d4881f', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: '700' }}>
                       🖨 Print
                     </button>
@@ -73,6 +79,84 @@ export default function RepairSales({ shop }) {
       )}
 
       {showNew && <NewSaleModal shop={shop} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); fetchSales() }} />}
+      {payingSale && <SalePaymentModal shop={shop} sale={payingSale} onClose={() => setPayingSale(null)} onPaid={() => { setPayingSale(null); fetchSales() }} />}
+    </div>
+  )
+}
+
+// Pays down a specific sale's remaining balance — updates the sale's own
+// amount_paid (which the customer's Activity Statement already reads live,
+// so no separate ledger write is needed there) and the customer's overall
+// outstanding_balance, plus records the cash/bank movement.
+function SalePaymentModal({ shop, sale, onClose, onPaid }) {
+  const [amount, setAmount] = useState('')
+  const [method, setMethod] = useState('cash')
+  const [bankAccountId, setBankAccountId] = useState('')
+  const [bankAccounts, setBankAccounts] = useState([])
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => { supabase.from('bank_accounts').select('*').order('name').then(({ data }) => setBankAccounts(data || [])) }, [])
+
+  const due = (sale.total || 0) - (sale.amount_paid || 0)
+
+  async function handlePay() {
+    const enteredAmount = parseFloat(amount)
+    if (!enteredAmount || enteredAmount <= 0) return toast.error('Enter a valid amount')
+    if ((method === 'card' || method === 'bank') && !bankAccountId) return toast.error('Select a bank account')
+    setSaving(true)
+    try {
+      const newPaid = (sale.amount_paid || 0) + enteredAmount
+      const { error } = await supabase.from('repair_sales').update({ amount_paid: newPaid }).eq('id', sale.id)
+      if (error) throw error
+
+      // Must not adjust the customer's balance if the sale itself failed to
+      // update — same reasoning as everywhere else in this app: never let a
+      // balance move without a record that explains it.
+      await supabase.rpc('repair_adjust_customer_balance', { p_customer_id: sale.customer_id, p_delta: -enteredAmount })
+
+      if (method === 'cash') {
+        await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'sale', amount: enteredAmount, reference: sale.sale_no, notes: 'Parts sale payment received' })
+      } else {
+        const bank = bankAccounts.find(b => b.id === bankAccountId)
+        await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) + enteredAmount }).eq('id', bankAccountId)
+        await supabase.from('bank_transactions').insert({ bank_account_id: bankAccountId, type: 'deposit', amount: enteredAmount, reference: `Parts sale payment: ${sale.sale_no}`, notes: `${method} payment` })
+      }
+
+      toast.success(`${formatLKR(enteredAmount)} received for ${sale.sale_no}`)
+      onPaid()
+    } catch (e) { toast.error('Failed: ' + e.message) }
+    setSaving(false)
+  }
+
+  const inp = { width: '100%', padding: '9px 12px', border: '1.5px solid #e7dfd3', borderRadius: '8px', fontSize: '13px', boxSizing: 'border-box' }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: '20px' }}>
+      <div style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '100%', maxWidth: '380px' }}>
+        <h3 style={{ fontSize: '16px', fontWeight: '800', margin: '0 0 4px', color: '#1c1917' }}>Pay — {sale.sale_no}</h3>
+        <p style={{ fontSize: '12px', color: '#8a7a63', margin: '0 0 16px' }}>Balance due: {formatLKR(due)}</p>
+
+        <div style={{ marginBottom: '10px' }}><label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478' }}>Amount</label><input type="number" style={inp} value={amount} onChange={e => setAmount(e.target.value)} placeholder={String(due)} autoFocus /></div>
+        <div style={{ marginBottom: '10px' }}>
+          <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478' }}>Method</label>
+          <select style={inp} value={method} onChange={e => setMethod(e.target.value)}>
+            <option value="cash">Cash</option><option value="card">Card</option><option value="bank">Bank Transfer</option>
+          </select>
+        </div>
+        {(method === 'card' || method === 'bank') && (
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478' }}>Bank Account</label>
+            <select style={inp} value={bankAccountId} onChange={e => setBankAccountId(e.target.value)}>
+              <option value="">Select...</option>
+              {bankAccounts.map(b => <option key={b.id} value={b.id}>{b.name}{b.bank_name ? ` — ${b.bank_name}` : ''}</option>)}
+            </select>
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button onClick={onClose} style={{ flex: 1, padding: '10px', background: '#f5f1ea', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '700' }}>Cancel</button>
+          <button onClick={handlePay} disabled={saving} style={{ flex: 1, padding: '10px', background: 'linear-gradient(135deg,#f0b23d,#d4881f)', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '800' }}>{saving ? 'Saving...' : 'Receive Payment'}</button>
+        </div>
+      </div>
     </div>
   )
 }
