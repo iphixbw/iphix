@@ -106,6 +106,20 @@ export default function RepairThirdParty({ shop }) {
         }).eq('id', item.id)
       }
 
+      // Mirror the normal supplier-payment convention (RepairPurchases.jsx): the
+      // balance drops immediately on recording, regardless of method — including
+      // cheques, which get reversed back up in Bank.jsx if the cheque later
+      // bounces. A batch can include items from more than one supplier (or none,
+      // for untracked/free-text suppliers), so group by supplier_id first.
+      const bySupplier = {}
+      for (const item of itemsToPay) {
+        if (!item.supplier_id) continue
+        bySupplier[item.supplier_id] = (bySupplier[item.supplier_id] || 0) + (item.cost_price || 0) * item.quantity
+      }
+      for (const [supplierId, amount] of Object.entries(bySupplier)) {
+        if (amount > 0) await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: supplierId, p_delta: -amount })
+      }
+
       if (totalAmount > 0 && method === 'cash') {
         await supabase.from('repair_cash_ledger').insert({
           shop_id: shop?.id || null, type: 'payment', amount: -totalAmount,

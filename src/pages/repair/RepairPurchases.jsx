@@ -119,9 +119,10 @@ function SupplierList({ shop, suppliers, onChanged }) {
 
   async function loadStatement(supplier) {
     const supplierId = supplier.id
-    const [{ data: purchases }, { data: payments }] = await Promise.all([
+    const [{ data: purchases }, { data: payments }, { data: thirdPartyItems }] = await Promise.all([
       supabase.from('repair_purchases').select('*').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
       supabase.from('repair_supplier_standalone_payments').select('*, bank_accounts(name)').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
+      supabase.from('repair_third_party_items').select('*, repair_jobs(job_no)').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
     ])
     const events = []
     if (supplier.opening_balance > 0) {
@@ -135,6 +136,21 @@ function SupplierList({ shop, suppliers, onChanged }) {
       date: p.created_at, type: 'purchase', label: `Purchase ${p.purchase_no}`,
       debit: p.total, credit: p.initial_payment || 0, ref: p.purchase_no,
     }))
+    ;(thirdPartyItems || []).forEach(t => {
+      const lineTotal = (t.cost_price || 0) * (t.quantity || 1)
+      events.push({
+        date: t.created_at, type: 'purchase',
+        label: `3rd-party item — ${t.item_name}${t.repair_jobs?.job_no ? ` (${t.repair_jobs.job_no})` : ''}`,
+        debit: lineTotal, credit: 0, ref: t.repair_jobs?.job_no || '',
+      })
+      if (t.payment_status === 'paid' && t.paid_at) {
+        events.push({
+          date: t.paid_at, type: 'payment',
+          label: `Settled (${t.payment_method || 'unknown'}) — ${t.item_name}`,
+          debit: 0, credit: lineTotal, ref: t.repair_jobs?.job_no || '',
+        })
+      }
+    })
     ;(payments || []).forEach(pay => {
       events.push({
         date: pay.created_at, type: 'payment', label: `Payment (${pay.payment_method}${pay.bank_accounts?.name ? ' — ' + pay.bank_accounts.name : ''})`,

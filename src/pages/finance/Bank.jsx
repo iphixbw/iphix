@@ -158,11 +158,22 @@ export default function Bank({ activeShop, isSuperAdmin }) {
           // transaction directly (a batch settlement can cover several items with
           // one cheque), so put every one of them back to pending.
           const { data: tpItems } = await supabase
-            .from('repair_third_party_items').select('id').eq('bank_transaction_id', tx.id)
+            .from('repair_third_party_items').select('id, supplier_id, cost_price, quantity').eq('bank_transaction_id', tx.id)
           if (tpItems?.length) {
             await supabase.from('repair_third_party_items').update({
               payment_status: 'pending', paid_at: null,
             }).eq('bank_transaction_id', tx.id)
+            // These items had reduced their linked supplier's balance when settled —
+            // a bounced cheque means that reduction never really happened, so
+            // reverse it the same way a returned repair-supplier cheque does.
+            const bySupplier = {}
+            for (const item of tpItems) {
+              if (!item.supplier_id) continue
+              bySupplier[item.supplier_id] = (bySupplier[item.supplier_id] || 0) + (item.cost_price || 0) * item.quantity
+            }
+            for (const [supplierId, amount] of Object.entries(bySupplier)) {
+              if (amount > 0) await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: supplierId, p_delta: amount })
+            }
             toast.success(`Cheque returned — ${tpItems.length} 3rd-party item${tpItems.length > 1 ? 's' : ''} marked pending again`)
           } else {
             const supMatch = ref.match(/Supplier:\s*(.+)/i)

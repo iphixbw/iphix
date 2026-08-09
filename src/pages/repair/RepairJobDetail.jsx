@@ -646,7 +646,9 @@ function AddPartModal({ shop, parts, jobId, onClose, onAdded }) {
   const [isThirdParty, setIsThirdParty] = useState(false)
   const [partId, setPartId] = useState('')
   const [thirdPartyName, setThirdPartyName] = useState('')
-  const [thirdPartySupplier, setThirdPartySupplier] = useState('')
+  const [suppliers, setSuppliers] = useState([])
+  const [thirdPartySupplierId, setThirdPartySupplierId] = useState('')
+  const [thirdPartySupplierOther, setThirdPartySupplierOther] = useState('')
   const [thirdPartyCost, setThirdPartyCost] = useState('')
   const [qty, setQty] = useState('1')
   const [price, setPrice] = useState('')
@@ -654,6 +656,7 @@ function AddPartModal({ shop, parts, jobId, onClose, onAdded }) {
   const selected = parts.find(p => p.id === partId)
 
   useEffect(() => { if (selected) setPrice(String(selected.selling_price || '')) }, [partId])
+  useEffect(() => { supabase.from('repair_suppliers').select('id, name').order('name').then(({ data }) => setSuppliers(data || [])) }, [])
 
   async function handleAdd() {
     const q = parseFloat(qty) || 1
@@ -664,11 +667,20 @@ function AddPartModal({ shop, parts, jobId, onClose, onAdded }) {
         if (!thirdPartyName.trim()) { toast.error('Enter the item name'); setSaving(false); return }
         if (!p) { toast.error('Enter a selling price'); setSaving(false); return }
         const cost = parseFloat(thirdPartyCost) || 0
+        const linkedSupplier = suppliers.find(s => s.id === thirdPartySupplierId)
+        const supplierName = linkedSupplier ? linkedSupplier.name : (thirdPartySupplierOther || null)
         await supabase.from('repair_third_party_items').insert({
           shop_id: shop?.id || null, job_id: jobId, item_name: thirdPartyName.trim(),
-          supplier_name: thirdPartySupplier || null, quantity: q, selling_price: p, cost_price: cost,
+          supplier_id: linkedSupplier?.id || null, supplier_name: supplierName,
+          quantity: q, selling_price: p, cost_price: cost,
           payment_status: 'pending',
         })
+        // Same convention as a normal purchase (RepairPurchases.jsx) — the unpaid
+        // amount raises the supplier's outstanding balance immediately, so it
+        // shows up in their Activity Statement right away, not just once settled.
+        if (linkedSupplier && cost > 0) {
+          await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: linkedSupplier.id, p_delta: cost * q })
+        }
         toast.success(cost > 0 ? '3rd-party item added' : '3rd-party item added — add cost later if unknown now')
       } else {
         if (!partId) { toast.error('Select a part'); setSaving(false); return }
@@ -704,7 +716,20 @@ function AddPartModal({ shop, parts, jobId, onClose, onAdded }) {
         {isThirdParty ? (
           <>
             <div style={{ marginBottom: '12px' }}><label style={{ fontSize: '11px', color: '#a89478', fontWeight: '700' }}>Item Name</label><input style={inp} value={thirdPartyName} onChange={e => setThirdPartyName(e.target.value)} /></div>
-            <div style={{ marginBottom: '12px' }}><label style={{ fontSize: '11px', color: '#a89478', fontWeight: '700' }}>Source / Supplier (optional)</label><input style={inp} value={thirdPartySupplier} onChange={e => setThirdPartySupplier(e.target.value)} /></div>
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ fontSize: '11px', color: '#a89478', fontWeight: '700' }}>Supplier (optional)</label>
+              <select style={inp} value={thirdPartySupplierId} onChange={e => setThirdPartySupplierId(e.target.value)}>
+                <option value="">— None / not tracked —</option>
+                {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                <option value="__other__">Other (type name below)</option>
+              </select>
+              {thirdPartySupplierId === '__other__' && (
+                <input style={{ ...inp, marginTop: '6px' }} placeholder="Supplier name" value={thirdPartySupplierOther} onChange={e => setThirdPartySupplierOther(e.target.value)} />
+              )}
+              {thirdPartySupplierId && thirdPartySupplierId !== '__other__' && (
+                <div style={{ fontSize: '11px', color: '#8a7a63', marginTop: '4px' }}>Linked — this supplier's balance and Activity Statement will reflect this item.</div>
+              )}
+            </div>
             <div style={{ marginBottom: '12px' }}>
               <label style={{ fontSize: '11px', color: '#a89478', fontWeight: '700' }}>Cost Price</label>
               <input type="number" style={inp} placeholder="Enter if known now, or update later" value={thirdPartyCost} onChange={e => setThirdPartyCost(e.target.value)} />
