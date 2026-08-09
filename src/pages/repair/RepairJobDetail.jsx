@@ -77,7 +77,9 @@ export default function RepairJobDetail({ jobId, shop, onBack }) {
       // reopening the job) triggered another fetch that finally picked up what
       // recalcTotals had written moments earlier.
       setJob(j => ({ ...j, ...updatedTotals }))
+      return { ...fresh.j, ...updatedTotals }
     }
+    return fresh.j
   }
 
   async function updateStatus(newStatus) {
@@ -107,13 +109,22 @@ export default function RepairJobDetail({ jobId, shop, onBack }) {
     if (isNaN(val) || val < 0) return toast.error('Enter a valid amount')
     setSaving(true)
     try {
+      const oldBalanceDue = job.balance_due || 0
       // Just write the new income value here — refreshAndRecalc() below recomputes
       // every derived total (profit, balance due, etc.) from fresh data in one place,
       // so there's no risk of this duplicating (and drifting from) that same math.
       await supabase.from('repair_jobs').update({ estimated_cost: val }).eq('id', jobId)
       setEditingCost(false)
       toast.success('Job income updated')
-      await refreshAndRecalc()
+      const updated = await refreshAndRecalc()
+      // Job creation and job cost edits are the two places that change what a
+      // customer owes without going through a payment flow — the customer's
+      // outstanding_balance needs to move by exactly the resulting change in
+      // this job's own balance_due, whichever direction that goes.
+      if (job.customer_id && updated?.balance_due !== undefined) {
+        const delta = updated.balance_due - oldBalanceDue
+        if (delta !== 0) await supabase.rpc('repair_adjust_customer_balance', { p_customer_id: job.customer_id, p_delta: delta })
+      }
     } catch (e) { toast.error('Failed: ' + e.message) }
     setSaving(false)
   }

@@ -204,6 +204,15 @@ function NewJobModal({ shop, onClose, onCreated }) {
       }).select().single()
       if (error) throw error
 
+      // Job creation never raised the customer's outstanding_balance for the
+      // unpaid portion — only credit sales did. Their balance still
+      // self-heals on next open regardless, but this keeps it correct
+      // immediately too (e.g. for the customer list, which doesn't recalc).
+      const initialBalanceDue = estCost - deposit
+      if (initialBalanceDue > 0) {
+        await supabase.rpc('repair_adjust_customer_balance', { p_customer_id: customerId, p_delta: initialBalanceDue })
+      }
+
       toast.success(`Job ${job_no} created!`)
       const { data: cust } = await supabase.from('repair_customers').select('*').eq('id', customerId).single()
       printJobReceipt(newJob, cust)

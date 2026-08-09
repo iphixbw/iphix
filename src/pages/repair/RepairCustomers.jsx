@@ -33,19 +33,53 @@ export default function RepairCustomers({ shop, onOpenJob }) {
     setJobs(j || [])
     setSales(s || [])
 
+    // outstanding_balance is normally kept in sync incrementally (payments,
+    // credit sales), but that only works if EVERY code path that changes what
+    // a customer owes remembers to call the adjust RPC — job creation and job
+    // cost edits didn't, so some customers' stored balance had quietly drifted
+    // from reality with nothing to catch it. Recalculating from scratch here,
+    // the same way job balances and FIFO stock values already self-heal on
+    // open, makes this resilient to any gap like that, present or future.
+    const trueBalance = (c.opening_balance || 0)
+      + (j || []).filter(job => job.status !== 'voided').reduce((s, job) => s + (job.balance_due || 0), 0)
+      + (s || []).reduce((sum, sale) => sum + Math.max(0, (sale.total || 0) - (sale.amount_paid || 0)), 0)
+    let fresh = c
+    if (trueBalance !== c.outstanding_balance) {
+      const { data: updated } = await supabase.from('repair_customers').update({ outstanding_balance: trueBalance }).eq('id', c.id).select().single()
+      if (updated) { fresh = updated; setSelected(updated); setCustomers(cs => cs.map(cc => cc.id === updated.id ? updated : cc)) }
+    }
+
+    const jobIds = (j || []).map(job => job.id)
+    const [{ data: jobPayments }, { data: standalone }] = await Promise.all([
+      jobIds.length ? supabase.from('repair_job_payments').select('*').in('job_id', jobIds) : Promise.resolve({ data: [] }),
+      supabase.from('repair_customer_standalone_payments').select('*, bank_accounts(name)').eq('customer_id', c.id),
+    ])
+
     // Build a chronological activity statement across jobs + sales + their payments
     const events = []
-    if (c.opening_balance > 0) {
+    const openingBal = fresh?.opening_balance ?? c.opening_balance
+    if (openingBal > 0) {
       events.push({
-        date: c.created_at || new Date(0).toISOString(),
-        label: 'Opening balance brought forward', debit: c.opening_balance, credit: 0, type: 'opening',
+        date: fresh.created_at || new Date(0).toISOString(),
+        label: 'Opening balance brought forward', debit: openingBal, credit: 0, type: 'opening',
       })
     }
     ;(j || []).forEach(job => {
+      // deposit_received is frozen at job creation — anything paid afterward
+      // (Collect Payment on the job itself, or a customer-level payment
+      // applied here) goes through repair_job_payments instead, shown below
+      // as its own line, so this never double-counts with those.
       events.push({ date: job.created_at, label: `Repair Job ${job.job_no} — ${job.phone_brand} ${job.phone_model}`, debit: job.grand_total || 0, credit: job.deposit_received || 0, type: 'job' })
+    })
+    ;(jobPayments || []).forEach(jp => {
+      const job = (j || []).find(job => job.id === jp.job_id)
+      events.push({ date: jp.created_at, label: `Payment (${jp.payment_method}) — Job ${job?.job_no || ''}`, debit: 0, credit: jp.amount, type: 'payment' })
     })
     ;(s || []).forEach(sale => {
       events.push({ date: sale.created_at, label: `Parts Sale ${sale.sale_no}`, debit: sale.total || 0, credit: sale.amount_paid || 0, type: 'sale' })
+    })
+    ;(standalone || []).forEach(sp => {
+      events.push({ date: sp.created_at, label: `Payment (${sp.payment_method}${sp.bank_accounts?.name ? ' — ' + sp.bank_accounts.name : ''})`, debit: 0, credit: sp.amount, type: 'payment' })
     })
     events.sort((a, b) => new Date(a.date) - new Date(b.date))
     let running = 0
@@ -124,13 +158,17 @@ export default function RepairCustomers({ shop, onOpenJob }) {
                 <div style={{ fontSize: '10px', fontWeight: '700', color: '#166534', textTransform: 'uppercase' }}>Total Spent</div>
                 <div style={{ fontSize: '18px', fontWeight: '800', color: '#166534' }}>{formatLKR(totalSpent)}</div>
               </div>
-              <div style={{ background: outstanding > 0 ? '#fff1f2' : '#f8f5f0', borderRadius: '10px', padding: '12px' }}>
-                <div style={{ fontSize: '10px', fontWeight: '700', color: outstanding > 0 ? '#e11d48' : '#8a7a63', textTransform: 'uppercase' }}>Outstanding</div>
-                <div style={{ fontSize: '18px', fontWeight: '800', color: outstanding > 0 ? '#e11d48' : '#8a7a63' }}>{formatLKR(outstanding)}</div>
+              <div style={{ background: selected.outstanding_balance > 0 ? '#fff1f2' : selected.outstanding_balance < 0 ? '#f0fdf4' : '#f8f5f0', borderRadius: '10px', padding: '12px' }}>
+                <div style={{ fontSize: '10px', fontWeight: '700', color: selected.outstanding_balance > 0 ? '#e11d48' : selected.outstanding_balance < 0 ? '#059669' : '#8a7a63', textTransform: 'uppercase' }}>
+                  {selected.outstanding_balance < 0 ? 'Credit Balance' : 'Outstanding'}
+                </div>
+                <div style={{ fontSize: '18px', fontWeight: '800', color: selected.outstanding_balance > 0 ? '#e11d48' : selected.outstanding_balance < 0 ? '#059669' : '#8a7a63' }}>
+                  {formatLKR(Math.abs(selected.outstanding_balance || 0))}
+                </div>
               </div>
             </div>
 
-            {(outstanding > 0 || selected.outstanding_balance > 0) && (
+            {(selected.outstanding_balance || 0) > 0 && (
               <button onClick={() => setShowReceivePayment(true)}
                 style={{ width: '100%', marginBottom: '14px', padding: '10px', background: 'linear-gradient(135deg,#f0b23d,#d4881f)', color: '#1c1917', border: 'none', borderRadius: '9px', cursor: 'pointer', fontWeight: '800', fontSize: '13px' }}>
                 💵 Receive Payment
@@ -245,8 +283,17 @@ function ReceivePaymentModal({ shop, customer, jobs, sales, onClose, onPaid }) {
         if (remaining <= 0) break
         const take = Math.min(remaining, item.due)
         if (item.kind === 'job') {
-          const newDeposit = (item.deposit_received || 0) + take
-          await supabase.from('repair_jobs').update({ balance_due: item.due - take, deposit_received: newDeposit }).eq('id', item.id)
+          // deposit_received is frozen at job creation (same convention as
+          // repair_purchases.initial_payment) — anything paid afterward goes
+          // through repair_job_payments instead, same table Collect Payment
+          // uses on the job's own page. That keeps this job's own balance
+          // self-healing correctly AND keeps the customer ledger from
+          // double-counting this against a separate standalone-payment line.
+          await supabase.from('repair_job_payments').insert({
+            job_id: item.id, amount: take, payment_method: method,
+            bank_account_id: (method === 'card' || method === 'bank') ? bankAccountId : null,
+          })
+          await supabase.from('repair_jobs').update({ balance_due: Math.max(0, item.due - take) }).eq('id', item.id)
         } else {
           const newPaid = (item.amount_paid || 0) + take
           await supabase.from('repair_sales').update({ amount_paid: newPaid }).eq('id', item.id)
@@ -255,12 +302,22 @@ function ReceivePaymentModal({ shop, customer, jobs, sales, onClose, onPaid }) {
         remaining -= take
       }
 
-      // The FULL entered amount is what was actually received — even if it's
-      // more than specific jobs/sales here could absorb (paying down an
-      // opening balance with no linked job, or a per-job balance that hasn't
-      // self-corrected since it was last opened). Crediting only the itemized
-      // portion silently dropped the rest — sometimes recording a payment of
-      // LKR 0 even though real money came in.
+      // Only the portion that couldn't be matched to a specific job/sale above
+      // (paying down an opening balance, or overpaying beyond what anything
+      // here could absorb) needs its own record — the itemized portion is
+      // already correctly reflected through repair_job_payments or the sale's
+      // amount_paid, so recording it again here would double-count it.
+      const unallocated = Math.max(0, remaining)
+      if (unallocated > 0.009) {
+        await supabase.from('repair_customer_standalone_payments').insert({
+          customer_id: customer.id, shop_id: shop?.id || null, amount: unallocated,
+          payment_method: method, bank_account_id: (method === 'card' || method === 'bank') ? bankAccountId : null,
+          reference: 'Payment received',
+        })
+      }
+
+      // The customer's overall balance always drops by the FULL entered
+      // amount, regardless of how it was allocated above.
       await supabase.rpc('repair_adjust_customer_balance', { p_customer_id: customer.id, p_delta: -enteredAmount })
 
       if (method === 'cash') {
