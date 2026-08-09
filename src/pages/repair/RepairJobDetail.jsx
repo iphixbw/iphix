@@ -24,16 +24,32 @@ export default function RepairJobDetail({ jobId, shop, onBack }) {
 
   useEffect(() => { refreshAndRecalc() }, [jobId])
 
+  // A plain .select() caps at Supabase's default 1000-row limit — with a large
+  // enough parts catalog, some parts silently never show up in the picker below,
+  // with no error to indicate anything was cut off.
+  async function fetchAllParts() {
+    let all = []
+    let from = 0
+    const PAGE_SIZE = 1000
+    while (true) {
+      const { data } = await supabase.from('repair_parts').select('*').order('name').range(from, from + PAGE_SIZE - 1)
+      all = all.concat(data || [])
+      if (!data || data.length < PAGE_SIZE) break
+      from += PAGE_SIZE
+    }
+    return all
+  }
+
   async function fetchAll() {
     setLoading(true)
-    const [{ data: j }, { data: tl }, { data: jp }, { data: tpi }, { data: jc }, { data: jpay }, { data: allParts }] = await Promise.all([
+    const [{ data: j }, { data: tl }, { data: jp }, { data: tpi }, { data: jc }, { data: jpay }, allParts] = await Promise.all([
       supabase.from('repair_jobs').select('*, repair_customers(*)').eq('id', jobId).single(),
       supabase.from('repair_job_timeline').select('*').eq('job_id', jobId).order('created_at', { ascending: true }),
       supabase.from('repair_job_parts').select('*, repair_parts(name, sku)').eq('job_id', jobId).eq('is_third_party', false),
       supabase.from('repair_third_party_items').select('*').eq('job_id', jobId),
       supabase.from('repair_job_charges').select('*').eq('job_id', jobId).order('created_at', { ascending: true }),
       supabase.from('repair_job_payments').select('*, bank_accounts(name)').eq('job_id', jobId).order('created_at', { ascending: true }),
-      supabase.from('repair_parts').select('*').order('name'),
+      fetchAllParts(),
     ])
     setJob(j)
     setTimeline(tl || [])

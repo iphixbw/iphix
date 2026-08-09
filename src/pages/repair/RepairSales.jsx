@@ -90,7 +90,24 @@ function NewSaleModal({ shop, onClose, onCreated }) {
   const [amountPaid, setAmountPaid] = useState('')
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => { supabase.from('repair_parts').select('id, name, selling_price, current_stock').order('name').then(({ data }) => setParts(data || [])) }, [])
+  useEffect(() => {
+    // A plain .select() caps at Supabase's default 1000-row limit — with a large
+    // enough parts catalog, some parts silently never show up in the picker,
+    // with no error to indicate anything was cut off.
+    async function fetchAllParts() {
+      let all = []
+      let from = 0
+      const PAGE_SIZE = 1000
+      while (true) {
+        const { data } = await supabase.from('repair_parts').select('id, name, selling_price, current_stock').order('name').range(from, from + PAGE_SIZE - 1)
+        all = all.concat(data || [])
+        if (!data || data.length < PAGE_SIZE) break
+        from += PAGE_SIZE
+      }
+      setParts(all)
+    }
+    fetchAllParts()
+  }, [])
 
   useEffect(() => {
     if (customerSearch.trim().length < 2) { setCustomerResults([]); return }
