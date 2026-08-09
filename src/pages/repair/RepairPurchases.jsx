@@ -122,7 +122,7 @@ function SupplierList({ shop, suppliers, onChanged }) {
     const [{ data: purchases }, { data: payments }, { data: thirdPartyItems }] = await Promise.all([
       supabase.from('repair_purchases').select('*').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
       supabase.from('repair_supplier_standalone_payments').select('*, bank_accounts(name)').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
-      supabase.from('repair_third_party_items').select('*, repair_jobs(job_no)').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
+      supabase.from('repair_third_party_items').select('*, repair_jobs(job_no), repair_sales(sale_no)').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
     ])
     const events = []
     if (supplier.opening_balance > 0) {
@@ -138,16 +138,17 @@ function SupplierList({ shop, suppliers, onChanged }) {
     }))
     ;(thirdPartyItems || []).forEach(t => {
       const lineTotal = (t.cost_price || 0) * (t.quantity || 1)
+      const ref = t.repair_jobs?.job_no || t.repair_sales?.sale_no || ''
       events.push({
         date: t.created_at, type: 'purchase',
-        label: `3rd-party item — ${t.item_name}${t.repair_jobs?.job_no ? ` (${t.repair_jobs.job_no})` : ''}`,
-        debit: lineTotal, credit: 0, ref: t.repair_jobs?.job_no || '',
+        label: `3rd-party item — ${t.item_name}${ref ? ` (${ref})` : ''}`,
+        debit: lineTotal, credit: 0, ref,
       })
       if (t.payment_status === 'paid' && t.paid_at) {
         events.push({
           date: t.paid_at, type: 'payment',
           label: `Settled (${t.payment_method || 'unknown'}) — ${t.item_name}`,
-          debit: 0, credit: lineTotal, ref: t.repair_jobs?.job_no || '',
+          debit: 0, credit: lineTotal, ref,
         })
       }
     })
@@ -277,7 +278,7 @@ function SupplierList({ shop, suppliers, onChanged }) {
 
       {showNew && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '360px' }}>
+          <div style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '100%', maxWidth: '360px' }}>
             <h3 style={{ fontSize: '16px', fontWeight: '800', margin: '0 0 16px', color: '#1c1917' }}>Add Supplier</h3>
             <input style={{ width: '100%', padding: '9px 12px', border: '1.5px solid #e7dfd3', borderRadius: '8px', marginBottom: '10px', boxSizing: 'border-box' }} placeholder="Name" value={name} onChange={e => setName(e.target.value)} />
             <input style={{ width: '100%', padding: '9px 12px', border: '1.5px solid #e7dfd3', borderRadius: '8px', marginBottom: '16px', boxSizing: 'border-box' }} placeholder="Phone" value={phone} onChange={e => setPhone(e.target.value)} />
@@ -402,7 +403,7 @@ function SupplierPaymentModal({ shop, supplier, onClose, onPaid }) {
   const inp = { width: '100%', padding: '9px 12px', border: '1.5px solid #e7dfd3', borderRadius: '8px', fontSize: '13px', boxSizing: 'border-box' }
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: '20px' }}>
-      <div style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '380px' }}>
+      <div style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '100%', maxWidth: '380px' }}>
         <h3 style={{ fontSize: '16px', fontWeight: '800', margin: '0 0 4px', color: '#1c1917' }}>Pay {supplier.name}</h3>
         <p style={{ fontSize: '12px', color: '#8a7a63', margin: '0 0 16px' }}>Outstanding: {formatLKR(supplier.outstanding_balance)}</p>
         <div style={{ marginBottom: '10px' }}><label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478' }}>Amount</label><input type="number" style={inp} value={amount} onChange={e => setAmount(e.target.value)} /></div>

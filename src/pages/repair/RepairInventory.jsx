@@ -10,6 +10,8 @@ export default function RepairInventory({ shop }) {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
+  const [currentPage, setCurrentPage] = useState(1)
+  const PAGE_SIZE = 500
   const [showNew, setShowNew] = useState(false)
   const [editingPart, setEditingPart] = useState(null)
 
@@ -60,17 +62,27 @@ export default function RepairInventory({ shop }) {
       from += PAGE_SIZE
     }
     setParts(allParts)
-    // Fetch FIFO stock value per part — batched rather than firing hundreds/thousands
-    // of RPC calls at once (which risks browser connection limits and rate limiting
-    // once the part count gets large).
+
+    // FIFO stock value used to be computed with one RPC call PER PART — with a
+    // 2000+ item catalog that's 2000+ sequential network round-trips, which is
+    // the actual reason this page was slow to load (not the parts fetch itself).
+    // repair_fifo_stock_value's own logic is just sum(quantity_remaining *
+    // unit_cost) per part — pulling every batch row once and summing per part_id
+    // in JS gets the exact same numbers in a handful of bulk requests instead.
+    let allBatches = []
+    from = 0
+    while (true) {
+      const { data, error } = await supabase.from('repair_part_batches')
+        .select('part_id, quantity_remaining, unit_cost').gt('quantity_remaining', 0)
+        .range(from, from + PAGE_SIZE - 1)
+      if (error) { toast.error('Failed to load stock values: ' + error.message); break }
+      allBatches = allBatches.concat(data || [])
+      if (!data || data.length < PAGE_SIZE) break
+      from += PAGE_SIZE
+    }
     const values = {}
-    const BATCH_SIZE = 25
-    for (let i = 0; i < allParts.length; i += BATCH_SIZE) {
-      const batch = allParts.slice(i, i + BATCH_SIZE)
-      await Promise.all(batch.map(async p => {
-        const { data: val } = await supabase.rpc('repair_fifo_stock_value', { p_part_id: p.id })
-        values[p.id] = val || 0
-      }))
+    for (const b of allBatches) {
+      values[b.part_id] = (values[b.part_id] || 0) + (b.quantity_remaining || 0) * (b.unit_cost || 0)
     }
     setStockValues(values)
     setLoading(false)
@@ -82,6 +94,16 @@ export default function RepairInventory({ shop }) {
       p.sku?.toLowerCase().includes(search.toLowerCase()) || p.barcode?.toLowerCase().includes(search.toLowerCase())
     return matchesCat && matchesSearch
   })
+
+  // Search/filter always run against the full in-memory list above — only the
+  // TABLE rendering is limited to 500 rows at a time, since rendering 2000+ DOM
+  // rows at once is what made scrolling and interaction sluggish, separate from
+  // the data-fetch slowness fixed in fetchParts().
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const pageSafe = Math.min(currentPage, totalPages)
+  const paginated = filtered.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE)
+
+  useEffect(() => { setCurrentPage(1) }, [search, categoryFilter])
 
   const totalValue = Object.values(stockValues).reduce((s, v) => s + v, 0)
   const lowStockCount = parts.filter(p => (p.current_stock || 0) <= (p.min_stock || 0)).length
@@ -133,7 +155,7 @@ export default function RepairInventory({ shop }) {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((p, i) => {
+              {paginated.map((p, i) => {
                 const low = (p.current_stock || 0) <= (p.min_stock || 0)
                 return (
                   <tr key={p.id} onClick={() => setEditingPart(p)} style={{ borderBottom: '1px solid #f8f5f0', background: low ? '#fff7ed' : i % 2 === 0 ? 'white' : '#fdfbf8', cursor: 'pointer' }}>
@@ -151,6 +173,22 @@ export default function RepairInventory({ shop }) {
             </tbody>
           </table>
           {filtered.length === 0 && <div style={{ padding: '48px', textAlign: 'center', color: '#a89478' }}>No parts found.</div>}
+          {totalPages > 1 && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderTop: '1px solid #f3ede4', fontSize: '13px', color: '#78716c' }}>
+              <span>Showing {(pageSafe - 1) * PAGE_SIZE + 1}–{Math.min(pageSafe * PAGE_SIZE, filtered.length)} of {filtered.length}</span>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={pageSafe === 1}
+                  style={{ padding: '7px 14px', background: pageSafe === 1 ? '#f5f1ea' : 'white', color: pageSafe === 1 ? '#c4b8a3' : '#1c1917', border: '1.5px solid #e7dfd3', borderRadius: '8px', cursor: pageSafe === 1 ? 'default' : 'pointer', fontWeight: '600' }}>
+                  ← Prev
+                </button>
+                <span style={{ fontWeight: '700' }}>Page {pageSafe} of {totalPages}</span>
+                <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={pageSafe === totalPages}
+                  style={{ padding: '7px 14px', background: pageSafe === totalPages ? '#f5f1ea' : 'white', color: pageSafe === totalPages ? '#c4b8a3' : '#1c1917', border: '1.5px solid #e7dfd3', borderRadius: '8px', cursor: pageSafe === totalPages ? 'default' : 'pointer', fontWeight: '600' }}>
+                  Next →
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -162,7 +200,116 @@ export default function RepairInventory({ shop }) {
 }
 
 // Exported so RepairPurchases.jsx can reuse the same "Add Part" modal (item 1)
-export function PartModal({ shop, part, onClose, onSaved }) {
+// Reusable searchable part picker — replaces plain <select> dropdowns for
+// choosing an inventory part. A native <select> only jumps to options by
+// PREFIX as you type (typing "Y13" won't find "VIVO Y13 Pin" since the name
+// doesn't start with that), which is what made search feel broken with a
+// large catalog. This filters by substring against name AND sku as you type,
+// and offers adding a brand-new part inline if nothing matches.
+// Used by both RepairSales.jsx (Parts Sales) and RepairJobDetail.jsx (job parts).
+export function PartPicker({ shop, parts, value, onChange, placeholder }) {
+  const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
+  const [showAddNew, setShowAddNew] = useState(false)
+  const selectedPart = parts.find(p => p.id === value)
+
+  const results = query.trim().length > 0
+    ? parts.filter(p =>
+        p.name.toLowerCase().includes(query.toLowerCase()) ||
+        p.sku?.toLowerCase().includes(query.toLowerCase())
+      ).slice(0, 25)
+    : []
+
+  const inp = { width: '100%', padding: '8px 10px', border: '1.5px solid #e7dfd3', borderRadius: '7px', fontSize: '13px', boxSizing: 'border-box' }
+
+  return (
+    <div style={{ position: 'relative' }}>
+      {selectedPart ? (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', background: '#fef3e2', borderRadius: '7px', border: '1.5px solid #e7dfd3', fontSize: '13px' }}>
+          <span style={{ fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedPart.name} ({selectedPart.current_stock || 0} in stock)</span>
+          <button onClick={() => { onChange('', null); setQuery('') }} style={{ background: 'none', border: 'none', color: '#e11d48', cursor: 'pointer', fontSize: '13px', flexShrink: 0, marginLeft: '6px' }}>✕</button>
+        </div>
+      ) : (
+        <>
+          <input style={inp} placeholder={placeholder || 'Search part name or SKU...'} value={query}
+            onChange={e => { setQuery(e.target.value); setOpen(true) }}
+            onFocus={() => setOpen(true)} />
+          {open && query.trim().length > 0 && (
+            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1.5px solid #e7dfd3', borderRadius: '8px', marginTop: '2px', zIndex: 20, boxShadow: '0 8px 20px rgba(0,0,0,0.12)', maxHeight: '220px', overflowY: 'auto' }}>
+              {results.map(p => (
+                <div key={p.id} onClick={() => { onChange(p.id, p); setQuery(''); setOpen(false) }}
+                  style={{ padding: '9px 12px', cursor: 'pointer', fontSize: '13px', borderBottom: '1px solid #f8f5f0' }}
+                  onMouseEnter={e => e.currentTarget.style.background = '#fdf8f3'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'white'}>
+                  <div style={{ fontWeight: '600' }}>{p.name}</div>
+                  <div style={{ fontSize: '11px', color: '#a89478' }}>{p.sku} · {p.current_stock || 0} in stock</div>
+                </div>
+              ))}
+              <div onClick={() => { setShowAddNew(true); setOpen(false) }}
+                style={{ padding: '9px 12px', cursor: 'pointer', fontSize: '13px', fontWeight: '700', color: '#d4881f', background: '#fef3e2' }}
+                onMouseEnter={e => e.currentTarget.style.background = '#fce8c9'}
+                onMouseLeave={e => e.currentTarget.style.background = '#fef3e2'}>
+                + Add "{query}" as new part
+              </div>
+              {results.length === 0 && (
+                <div style={{ padding: '9px 12px', fontSize: '12px', color: '#a89478' }}>No matching parts.</div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {showAddNew && (
+        <PartModal shop={shop} part={null} initialName={query}
+          onClose={() => setShowAddNew(false)}
+          onSaved={(newPart) => { setShowAddNew(false); setQuery(''); if (newPart) onChange(newPart.id, newPart) }} />
+      )}
+    </div>
+  )
+}
+
+// A lighter-weight sibling of PartPicker for 3rd-party item names — always a
+// free-text field (a one-off item sourced elsewhere doesn't have to already
+// exist in inventory, and shouldn't be forced to), but suggests matching
+// existing parts as you type so the SAME product ends up with the same name
+// every time, whether it's sold from stock or sourced from a 3rd party this
+// time around. Selecting a suggestion never touches that part's stock —
+// callers should not run any FIFO/stock RPCs off the part_id this returns.
+export function PartNameAutocomplete({ parts, value, onChangeText, onSelectPart, placeholder }) {
+  const [open, setOpen] = useState(false)
+  const results = value.trim().length > 0
+    ? parts.filter(p =>
+        p.name.toLowerCase().includes(value.toLowerCase()) ||
+        p.sku?.toLowerCase().includes(value.toLowerCase())
+      ).slice(0, 15)
+    : []
+  const inp = { width: '100%', padding: '8px 10px', border: '1.5px solid #e7dfd3', borderRadius: '7px', fontSize: '13px', boxSizing: 'border-box' }
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <input style={inp} placeholder={placeholder || 'Item name'} value={value}
+        onChange={e => { onChangeText(e.target.value); setOpen(true) }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)} />
+      {open && results.length > 0 && (
+        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1.5px solid #e7dfd3', borderRadius: '8px', marginTop: '2px', zIndex: 20, boxShadow: '0 8px 20px rgba(0,0,0,0.12)', maxHeight: '200px', overflowY: 'auto' }}>
+          <div style={{ padding: '6px 12px', fontSize: '10px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Matches in inventory — won't affect their stock</div>
+          {results.map(p => (
+            <div key={p.id} onMouseDown={() => { onSelectPart(p); setOpen(false) }}
+              style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '13px', borderTop: '1px solid #f8f5f0' }}
+              onMouseEnter={e => e.currentTarget.style.background = '#fdf8f3'}
+              onMouseLeave={e => e.currentTarget.style.background = 'white'}>
+              <div style={{ fontWeight: '600' }}>{p.name}</div>
+              <div style={{ fontSize: '11px', color: '#a89478' }}>{p.sku} · {p.current_stock || 0} in stock</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function PartModal({ shop, part, initialName, onClose, onSaved }) {
   const [suppliers, setSuppliers] = useState([])
   const [saving, setSaving] = useState(false)
   const [categoriesInUse, setCategoriesInUse] = useState([])
@@ -172,7 +319,7 @@ export function PartModal({ shop, part, onClose, onSaved }) {
   const [livePart, setLivePart] = useState(part)
   const [showAdjust, setShowAdjust] = useState(false)
   const [form, setForm] = useState({
-    sku: part?.sku || '', barcode: part?.barcode || '', name: part?.name || '',
+    sku: part?.sku || '', barcode: part?.barcode || '', name: part?.name || initialName || '',
     compatible_models: part?.compatible_models || '', category: part?.category || '',
     brand: part?.brand || '', supplier_id: part?.supplier_id || '',
     purchase_price: part?.purchase_price || '',
@@ -227,6 +374,7 @@ export function PartModal({ shop, part, onClose, onSaved }) {
         const { error } = await supabase.from('repair_parts').update(payload).eq('id', part.id)
         if (error) throw error
         toast.success('Part updated!')
+        onSaved({ ...part, ...payload })
       } else {
         const openingQty = parseFloat(form.opening_stock) || 0
         const { data: newPart, error } = await supabase.from('repair_parts').insert({ ...payload, current_stock: openingQty }).select().single()
@@ -239,8 +387,8 @@ export function PartModal({ shop, part, onClose, onSaved }) {
           })
         }
         toast.success('Part added!')
+        onSaved(newPart)
       }
-      onSaved()
     } catch (e) { toast.error('Failed: ' + e.message) }
     setSaving(false)
   }

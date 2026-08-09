@@ -4,6 +4,8 @@ import toast from 'react-hot-toast'
 import { formatLKR, timeAgo, printPartsSaleReceipt } from '../../lib/repairConstants'
 import { generateRepairSaleNo, generateRepairCustomerNo } from '../../lib/repairHelpers'
 
+import { PartPicker, PartNameAutocomplete } from './RepairInventory'
+
 export default function RepairSales({ shop }) {
   const [sales, setSales] = useState([])
   const [loading, setLoading] = useState(true)
@@ -85,10 +87,13 @@ function NewSaleModal({ shop, onClose, onCreated }) {
   const [newCustomerMobile, setNewCustomerMobile] = useState('')
   const [creatingCustomer, setCreatingCustomer] = useState(false)
   const [parts, setParts] = useState([])
-  const [rows, setRows] = useState([{ part_id: '', quantity: '1', unit_price: '' }])
+  const [suppliers, setSuppliers] = useState([])
+  const [rows, setRows] = useState([{ part_id: '', quantity: '1', unit_price: '', is_third_party: false, item_name: '', supplier_id: '', supplier_other: '', cost_price: '' }])
   const [paymentMethod, setPaymentMethod] = useState('cash')
   const [amountPaid, setAmountPaid] = useState('')
   const [saving, setSaving] = useState(false)
+
+  useEffect(() => { supabase.from('repair_suppliers').select('id, name').order('name').then(({ data }) => setSuppliers(data || [])) }, [])
 
   useEffect(() => {
     // A plain .select() caps at Supabase's default 1000-row limit — with a large
@@ -99,7 +104,7 @@ function NewSaleModal({ shop, onClose, onCreated }) {
       let from = 0
       const PAGE_SIZE = 1000
       while (true) {
-        const { data } = await supabase.from('repair_parts').select('id, name, selling_price, current_stock').order('name').range(from, from + PAGE_SIZE - 1)
+        const { data } = await supabase.from('repair_parts').select('id, name, sku, selling_price, current_stock').order('name').range(from, from + PAGE_SIZE - 1)
         all = all.concat(data || [])
         if (!data || data.length < PAGE_SIZE) break
         from += PAGE_SIZE
@@ -134,7 +139,12 @@ function NewSaleModal({ shop, onClose, onCreated }) {
       return next
     }))
   }
-  function addRow() { setRows(rs => [...rs, { part_id: '', quantity: '1', unit_price: '' }]) }
+  function toggleThirdParty(i) {
+    setRows(rs => rs.map((r, idx) => idx !== i ? r : {
+      ...r, is_third_party: !r.is_third_party, part_id: '', unit_price: '',
+    }))
+  }
+  function addRow() { setRows(rs => [...rs, { part_id: '', quantity: '1', unit_price: '', is_third_party: false, item_name: '', supplier_id: '', supplier_other: '', cost_price: '' }]) }
   function removeRow(i) { setRows(rs => rs.filter((_, idx) => idx !== i)) }
 
   async function handleCreateCustomer() {
@@ -156,12 +166,14 @@ function NewSaleModal({ shop, onClose, onCreated }) {
   }
 
   async function handleSave() {
-    const validRows = rows.filter(r => r.part_id && parseFloat(r.quantity) > 0)
-    if (validRows.length === 0) return toast.error('Add at least one part')
+    const validRows = rows.filter(r => r.is_third_party ? (r.item_name.trim() && parseFloat(r.quantity) > 0) : (r.part_id && parseFloat(r.quantity) > 0))
+    if (validRows.length === 0) return toast.error('Add at least one item')
     for (const r of validRows) {
+      if (r.is_third_party) continue
       const part = parts.find(p => p.id === r.part_id)
       if (part && parseFloat(r.quantity) > (part.current_stock || 0)) return toast.error(`Only ${part.current_stock || 0} of "${part.name}" in stock`)
     }
+    if (validRows.some(r => !(parseFloat(r.unit_price) > 0))) return toast.error('Enter a selling price for every item')
     if (paymentMethod === 'credit' && !selectedCustomer) return toast.error('Select a customer for a credit sale')
     setSaving(true)
     try {
@@ -176,9 +188,28 @@ function NewSaleModal({ shop, onClose, onCreated }) {
 
       for (const r of validRows) {
         const qty = parseFloat(r.quantity), price = parseFloat(r.unit_price) || 0
-        const { data: unitCost } = await supabase.rpc('repair_fifo_consume', { p_part_id: r.part_id, p_quantity: qty })
-        await supabase.from('repair_sale_items').insert({ sale_id: sale.id, part_id: r.part_id, quantity: qty, unit_price: price, unit_cost: unitCost || 0, line_total: qty * price })
-        await supabase.rpc('repair_deduct_part_stock', { p_part_id: r.part_id, p_quantity: qty })
+        if (r.is_third_party) {
+          // Same table and workflow as a job's 3rd-party items — settlement,
+          // supplier balance, and the supplier's Activity Statement all already
+          // handle this table regardless of whether job_id or sale_id is set.
+          const linkedSupplier = suppliers.find(s => s.id === r.supplier_id)
+          const supplierName = linkedSupplier ? linkedSupplier.name : (r.supplier_other || null)
+          const cost = parseFloat(r.cost_price) || 0
+          await supabase.from('repair_third_party_items').insert({
+            shop_id: shop?.id || null, sale_id: sale.id, item_name: r.item_name.trim(),
+            part_id: r.part_id || null,
+            supplier_id: linkedSupplier?.id || null, supplier_name: supplierName,
+            quantity: qty, selling_price: price, cost_price: cost,
+            payment_status: 'pending',
+          })
+          if (linkedSupplier && cost > 0) {
+            await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: linkedSupplier.id, p_delta: cost * qty })
+          }
+        } else {
+          const { data: unitCost } = await supabase.rpc('repair_fifo_consume', { p_part_id: r.part_id, p_quantity: qty })
+          await supabase.from('repair_sale_items').insert({ sale_id: sale.id, part_id: r.part_id, quantity: qty, unit_price: price, unit_cost: unitCost || 0, line_total: qty * price })
+          await supabase.rpc('repair_deduct_part_stock', { p_part_id: r.part_id, p_quantity: qty })
+        }
       }
 
       // Cash ledger only reflects actual cash received today, not credit or non-cash methods
@@ -193,7 +224,7 @@ function NewSaleModal({ shop, onClose, onCreated }) {
       toast.success(`Sale ${sale_no} recorded!`)
       if (window.confirm('Sale recorded! Print a receipt?')) {
         const receiptItems = validRows.map(r => ({
-          repair_parts: { name: parts.find(p => p.id === r.part_id)?.name || '' },
+          repair_parts: { name: r.is_third_party ? r.item_name.trim() : (parts.find(p => p.id === r.part_id)?.name || '') },
           quantity: parseFloat(r.quantity), unit_price: parseFloat(r.unit_price) || 0,
           line_total: (parseFloat(r.quantity) || 0) * (parseFloat(r.unit_price) || 0),
         }))
@@ -259,14 +290,51 @@ function NewSaleModal({ shop, onClose, onCreated }) {
 
         <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Parts</label>
         {rows.map((r, i) => (
-          <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 0.7fr 1fr auto', gap: '8px', marginBottom: '8px', marginTop: '6px' }}>
-            <select style={inp} value={r.part_id} onChange={e => updateRow(i, 'part_id', e.target.value)}>
-              <option value="">Select part...</option>
-              {parts.map(p => <option key={p.id} value={p.id}>{p.name} ({p.current_stock || 0} in stock)</option>)}
-            </select>
-            <input type="number" style={inp} placeholder="Qty" value={r.quantity} onChange={e => updateRow(i, 'quantity', e.target.value)} />
-            <input type="number" style={inp} placeholder="Price" value={r.unit_price} onChange={e => updateRow(i, 'unit_price', e.target.value)} />
-            <button onClick={() => removeRow(i)} style={{ background: '#fee2e2', border: 'none', borderRadius: '7px', color: '#e11d48', cursor: 'pointer', padding: '0 10px' }}>✕</button>
+          <div key={i} style={{ border: r.is_third_party ? '1.5px dashed #e7dfd3' : 'none', borderRadius: '8px', padding: r.is_third_party ? '8px' : 0, marginBottom: '8px', marginTop: '6px' }}>
+            {r.is_third_party ? (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.7fr 1fr auto', gap: '8px', marginBottom: '6px' }}>
+                  <PartNameAutocomplete parts={parts} value={r.item_name}
+                    onChangeText={val => setRows(rs => rs.map((row, idx) => idx !== i ? row : { ...row, item_name: val, part_id: '' }))}
+                    onSelectPart={p => {
+                      setRows(rs => rs.map((row, idx) => idx !== i ? row : { ...row, item_name: p.name, part_id: p.id }))
+                    }} />
+                  <input type="number" style={inp} placeholder="Qty" value={r.quantity} onChange={e => updateRow(i, 'quantity', e.target.value)} />
+                  <input type="number" style={inp} placeholder="Sell Price" value={r.unit_price} onChange={e => updateRow(i, 'unit_price', e.target.value)} />
+                  <button onClick={() => removeRow(i)} style={{ background: '#fee2e2', border: 'none', borderRadius: '7px', color: '#e11d48', cursor: 'pointer', padding: '0 10px' }}>✕</button>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '4px' }}>
+                  <select style={inp} value={r.supplier_id} onChange={e => updateRow(i, 'supplier_id', e.target.value)}>
+                    <option value="">— Supplier: none / not tracked —</option>
+                    {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    <option value="__other__">Other (type below)</option>
+                  </select>
+                  <input type="number" style={inp} placeholder="Cost price" value={r.cost_price} onChange={e => updateRow(i, 'cost_price', e.target.value)} />
+                </div>
+                {r.supplier_id === '__other__' && (
+                  <input style={inp} placeholder="Supplier name" value={r.supplier_other} onChange={e => updateRow(i, 'supplier_other', e.target.value)} />
+                )}
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px', fontSize: '11px', color: '#8a7a63', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={r.is_third_party} onChange={() => toggleThirdParty(i)} /> 3rd-party item (not from inventory)
+                </label>
+              </>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.7fr 1fr auto', gap: '8px' }}>
+                <PartPicker shop={shop} parts={parts} value={r.part_id}
+                  onChange={(id, p) => {
+                    setRows(rs => rs.map((row, idx) => idx !== i ? row : { ...row, part_id: id, unit_price: p ? String(p.selling_price || '') : '' }))
+                    if (p && !parts.some(pp => pp.id === p.id)) setParts(ps => [...ps, p])
+                  }} />
+                <input type="number" style={inp} placeholder="Qty" value={r.quantity} onChange={e => updateRow(i, 'quantity', e.target.value)} />
+                <input type="number" style={inp} placeholder="Price" value={r.unit_price} onChange={e => updateRow(i, 'unit_price', e.target.value)} />
+                <button onClick={() => removeRow(i)} style={{ background: '#fee2e2', border: 'none', borderRadius: '7px', color: '#e11d48', cursor: 'pointer', padding: '0 10px' }}>✕</button>
+              </div>
+            )}
+            {!r.is_third_party && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', fontSize: '11px', color: '#8a7a63', cursor: 'pointer' }}>
+                <input type="checkbox" checked={r.is_third_party} onChange={() => toggleThirdParty(i)} /> 3rd-party item (not from inventory)
+              </label>
+            )}
           </div>
         ))}
         <button onClick={addRow} style={{ marginBottom: '16px', padding: '6px 14px', background: '#fef3e2', color: '#d4881f', border: 'none', borderRadius: '7px', cursor: 'pointer', fontSize: '12px', fontWeight: '700' }}>+ Add Row</button>

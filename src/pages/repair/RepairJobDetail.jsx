@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../../supabase'
 import toast from 'react-hot-toast'
 import { JOB_STATUSES, PRIORITIES, CHARGE_TYPES, statusMeta, priorityMeta, formatLKR, timeAgo, printJobReceipt, printJobPaymentReceipt } from '../../lib/repairConstants'
+import { PartPicker, PartNameAutocomplete } from './RepairInventory'
 
 export default function RepairJobDetail({ jobId, shop, onBack }) {
   const [job, setJob] = useState(null)
@@ -572,7 +573,7 @@ function VoidJobModal({ job, jobParts, thirdPartyItems, jobPayments, onClose, on
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: '20px' }}>
-      <div style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '440px' }}>
+      <div style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '100%', maxWidth: '440px' }}>
         <h3 style={{ fontSize: '16px', fontWeight: '800', margin: '0 0 4px', color: '#e11d48' }}>Void Job {job.job_no}?</h3>
         <p style={{ fontSize: '12px', color: '#8a7a63', margin: '0 0 14px' }}>This cannot be undone. The following will be reversed:</p>
         <ul style={{ fontSize: '13px', color: '#44403c', margin: '0 0 16px', paddingLeft: '18px', lineHeight: '1.7' }}>
@@ -630,7 +631,7 @@ function CollectPaymentModal({ job, balanceDue, onClose, onCollected }) {
   const inp = { width: '100%', padding: '9px 12px', border: '1.5px solid #e7dfd3', borderRadius: '8px', fontSize: '13px', boxSizing: 'border-box' }
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: '20px' }}>
-      <div style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '380px' }}>
+      <div style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '100%', maxWidth: '380px' }}>
         <h3 style={{ fontSize: '16px', fontWeight: '800', margin: '0 0 4px', color: '#1c1917' }}>Collect Payment</h3>
         <p style={{ fontSize: '12px', color: '#8a7a63', margin: '0 0 16px' }}>Balance due: {formatLKR(balanceDue)}</p>
         <div style={{ marginBottom: '10px' }}><label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478' }}>Amount</label><input type="number" style={inp} value={amount} onChange={e => setAmount(e.target.value)} /></div>
@@ -661,7 +662,9 @@ function CollectPaymentModal({ job, balanceDue, onClose, onCollected }) {
 function AddPartModal({ shop, parts, jobId, onClose, onAdded }) {
   const [isThirdParty, setIsThirdParty] = useState(false)
   const [partId, setPartId] = useState('')
+  const [localParts, setLocalParts] = useState(parts)
   const [thirdPartyName, setThirdPartyName] = useState('')
+  const [thirdPartyPartRef, setThirdPartyPartRef] = useState('')
   const [suppliers, setSuppliers] = useState([])
   const [thirdPartySupplierId, setThirdPartySupplierId] = useState('')
   const [thirdPartySupplierOther, setThirdPartySupplierOther] = useState('')
@@ -669,7 +672,7 @@ function AddPartModal({ shop, parts, jobId, onClose, onAdded }) {
   const [qty, setQty] = useState('1')
   const [price, setPrice] = useState('')
   const [saving, setSaving] = useState(false)
-  const selected = parts.find(p => p.id === partId)
+  const selected = localParts.find(p => p.id === partId)
 
   useEffect(() => { if (selected) setPrice(String(selected.selling_price || '')) }, [partId])
   useEffect(() => { supabase.from('repair_suppliers').select('id, name').order('name').then(({ data }) => setSuppliers(data || [])) }, [])
@@ -687,6 +690,7 @@ function AddPartModal({ shop, parts, jobId, onClose, onAdded }) {
         const supplierName = linkedSupplier ? linkedSupplier.name : (thirdPartySupplierOther || null)
         await supabase.from('repair_third_party_items').insert({
           shop_id: shop?.id || null, job_id: jobId, item_name: thirdPartyName.trim(),
+          part_id: thirdPartyPartRef || null,
           supplier_id: linkedSupplier?.id || null, supplier_name: supplierName,
           quantity: q, selling_price: p, cost_price: cost,
           payment_status: 'pending',
@@ -731,7 +735,12 @@ function AddPartModal({ shop, parts, jobId, onClose, onAdded }) {
 
         {isThirdParty ? (
           <>
-            <div style={{ marginBottom: '12px' }}><label style={{ fontSize: '11px', color: '#a89478', fontWeight: '700' }}>Item Name</label><input style={inp} value={thirdPartyName} onChange={e => setThirdPartyName(e.target.value)} /></div>
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ fontSize: '11px', color: '#a89478', fontWeight: '700' }}>Item Name</label>
+              <PartNameAutocomplete parts={localParts} value={thirdPartyName}
+                onChangeText={val => { setThirdPartyName(val); setThirdPartyPartRef('') }}
+                onSelectPart={p => { setThirdPartyName(p.name); setThirdPartyPartRef(p.id) }} />
+            </div>
             <div style={{ marginBottom: '12px' }}>
               <label style={{ fontSize: '11px', color: '#a89478', fontWeight: '700' }}>Supplier (optional)</label>
               <select style={inp} value={thirdPartySupplierId} onChange={e => setThirdPartySupplierId(e.target.value)}>
@@ -754,10 +763,11 @@ function AddPartModal({ shop, parts, jobId, onClose, onAdded }) {
         ) : (
           <div style={{ marginBottom: '12px' }}>
             <label style={{ fontSize: '11px', color: '#a89478', fontWeight: '700' }}>Part</label>
-            <select style={inp} value={partId} onChange={e => setPartId(e.target.value)}>
-              <option value="">Select part...</option>
-              {parts.map(p => <option key={p.id} value={p.id}>{p.name} ({p.current_stock || 0} in stock)</option>)}
-            </select>
+            <PartPicker shop={shop} parts={localParts} value={partId}
+              onChange={(id, p) => {
+                setPartId(id)
+                if (p && !localParts.some(lp => lp.id === p.id)) setLocalParts(lps => [...lps, p])
+              }} />
           </div>
         )}
 

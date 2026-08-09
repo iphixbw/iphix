@@ -24,7 +24,7 @@ export default function RepairThirdParty({ shop }) {
 
   async function fetchItems() {
     setLoading(true)
-    let q = supabase.from('repair_third_party_items').select('*, repair_jobs(job_no)').order('created_at', { ascending: false })
+    let q = supabase.from('repair_third_party_items').select('*, repair_jobs(job_no), repair_sales(sale_no)').order('created_at', { ascending: false })
     if (shop?.id) q = q.eq('shop_id', shop.id)
     const { data } = await q
     setItems(data || [])
@@ -191,7 +191,7 @@ export default function RepairThirdParty({ shop }) {
                     )}
                   </td>
                   <td style={{ padding: '9px 14px', fontSize: '12px', color: '#78716c' }}>{timeAgo(i.created_at)}</td>
-                  <td style={{ padding: '9px 14px', color: '#d4881f', fontWeight: '700' }}>{i.repair_jobs?.job_no}</td>
+                  <td style={{ padding: '9px 14px', color: '#d4881f', fontWeight: '700' }}>{i.repair_jobs?.job_no || i.repair_sales?.sale_no || '—'}</td>
                   <td style={{ padding: '9px 14px', fontWeight: '600' }}>{i.item_name}</td>
                   <td style={{ padding: '9px 14px', color: '#78716c' }}>{i.supplier_name || '—'}</td>
                   <td style={{ padding: '9px 14px' }}>{i.quantity}</td>
@@ -251,7 +251,7 @@ function SettleModal({ items, bankAccounts, onClose, onConfirm }) {
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: '20px' }}>
-      <div style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '400px' }}>
+      <div style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '100%', maxWidth: '400px' }}>
         <h3 style={{ fontSize: '16px', fontWeight: '800', margin: '0 0 4px', color: '#1c1917' }}>
           {items.length === 1 ? `Settle: ${items[0].item_name}` : `Settle ${items.length} items`}
         </h3>
@@ -261,7 +261,7 @@ function SettleModal({ items, bankAccounts, onClose, onConfirm }) {
           <div style={{ marginBottom: '14px', maxHeight: '110px', overflowY: 'auto', background: '#fdf8f3', borderRadius: '8px', padding: '8px 10px' }}>
             {items.map(i => (
               <div key={i.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', padding: '2px 0' }}>
-                <span>{i.item_name} ({i.repair_jobs?.job_no})</span>
+                <span>{i.item_name} ({i.repair_jobs?.job_no || i.repair_sales?.sale_no || '—'})</span>
                 <span style={{ fontWeight: '600' }}>{formatLKR((i.cost_price || 0) * i.quantity)}</span>
               </div>
             ))}
