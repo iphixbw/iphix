@@ -195,13 +195,17 @@ function NewSaleModal({ shop, onClose, onCreated }) {
           const linkedSupplier = suppliers.find(s => s.id === r.supplier_id)
           const supplierName = linkedSupplier ? linkedSupplier.name : (r.supplier_other || null)
           const cost = parseFloat(r.cost_price) || 0
-          await supabase.from('repair_third_party_items').insert({
+          const { error: tpError } = await supabase.from('repair_third_party_items').insert({
             shop_id: shop?.id || null, sale_id: sale.id, item_name: r.item_name.trim(),
             part_id: r.part_id || null,
             supplier_id: linkedSupplier?.id || null, supplier_name: supplierName,
             quantity: qty, selling_price: price, cost_price: cost,
             payment_status: 'pending',
           })
+          // Must not adjust the supplier's balance if the item record itself
+          // failed to save — that leaves the balance changed with nothing on
+          // record to explain it, which is worse than the sale failing outright.
+          if (tpError) throw new Error(`Failed to save 3rd-party item "${r.item_name}": ${tpError.message}`)
           if (linkedSupplier && cost > 0) {
             await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: linkedSupplier.id, p_delta: cost * qty })
           }

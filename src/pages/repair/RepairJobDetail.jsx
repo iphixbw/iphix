@@ -688,13 +688,17 @@ function AddPartModal({ shop, parts, jobId, onClose, onAdded }) {
         const cost = parseFloat(thirdPartyCost) || 0
         const linkedSupplier = suppliers.find(s => s.id === thirdPartySupplierId)
         const supplierName = linkedSupplier ? linkedSupplier.name : (thirdPartySupplierOther || null)
-        await supabase.from('repair_third_party_items').insert({
+        const { error: tpError } = await supabase.from('repair_third_party_items').insert({
           shop_id: shop?.id || null, job_id: jobId, item_name: thirdPartyName.trim(),
           part_id: thirdPartyPartRef || null,
           supplier_id: linkedSupplier?.id || null, supplier_name: supplierName,
           quantity: q, selling_price: p, cost_price: cost,
           payment_status: 'pending',
         })
+        // Must not adjust the supplier's balance if the item record itself
+        // failed to save — that leaves the balance changed with nothing on
+        // record to explain it, which is worse than the add failing outright.
+        if (tpError) { toast.error('Failed to save item: ' + tpError.message); setSaving(false); return }
         // Same convention as a normal purchase (RepairPurchases.jsx) — the unpaid
         // amount raises the supplier's outstanding balance immediately, so it
         // shows up in their Activity Statement right away, not just once settled.

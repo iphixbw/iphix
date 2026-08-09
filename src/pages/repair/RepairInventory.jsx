@@ -497,6 +497,7 @@ function StockAdjustmentModal({ shop, part, onClose, onAdjusted }) {
   const [type, setType] = useState('increase')
   const [quantity, setQuantity] = useState('')
   const [unitCost, setUnitCost] = useState(String(part.average_cost || part.purchase_price || ''))
+  const [correctedCost, setCorrectedCost] = useState(String(part.average_cost || part.purchase_price || ''))
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -504,8 +505,35 @@ function StockAdjustmentModal({ shop, part, onClose, onAdjusted }) {
   const currentStock = part.current_stock || 0
 
   async function handleAdjust() {
-    if (!qty || qty <= 0) return toast.error('Enter a valid quantity')
     if (!reason.trim()) return toast.error('A reason is required for stock adjustments')
+
+    if (type === 'cost_correction') {
+      const newCost = parseFloat(correctedCost)
+      if (!(newCost >= 0)) return toast.error('Enter a valid cost')
+      setSaving(true)
+      try {
+        // Corrects the TRUE cost basis of stock already on hand — updates every
+        // existing batch's unit_cost directly, which is what FIFO Value and job/
+        // sale costing actually read from. The part's own purchase_price/
+        // average_cost fields are just a reference for the NEXT purchase, so
+        // editing those alone (the Edit Part form) never touches this.
+        await supabase.from('repair_part_batches').update({ unit_cost: newCost })
+          .eq('part_id', part.id).gt('quantity_remaining', 0)
+        await supabase.from('repair_parts').update({ average_cost: newCost, purchase_price: newCost }).eq('id', part.id)
+        await supabase.from('repair_stock_adjustments').insert({
+          part_id: part.id, shop_id: shop?.id || null, adjustment_type: 'cost_correction',
+          quantity: currentStock, unit_cost: newCost,
+          previous_stock: currentStock, new_stock: currentStock, reason: reason.trim(),
+        })
+        toast.success(`Cost corrected — ${part.name}'s existing stock now valued at ${newCost}/unit`)
+        const { data: fresh } = await supabase.from('repair_parts').select('*').eq('id', part.id).single()
+        onAdjusted(fresh || part)
+      } catch (e) { toast.error('Failed: ' + e.message) }
+      setSaving(false)
+      return
+    }
+
+    if (!qty || qty <= 0) return toast.error('Enter a valid quantity')
     if (type === 'decrease' && qty > currentStock) return toast.error(`Cannot remove more than the current stock (${currentStock})`)
     setSaving(true)
     try {
@@ -549,12 +577,24 @@ function StockAdjustmentModal({ shop, part, onClose, onAdjusted }) {
             style={{ flex: 1, padding: '9px', borderRadius: '8px', border: type === 'decrease' ? '1.5px solid #e11d48' : '1.5px solid #e7dfd3', background: type === 'decrease' ? '#fff1f2' : 'white', color: type === 'decrease' ? '#e11d48' : '#78716c', fontWeight: '700', fontSize: '13px', cursor: 'pointer' }}>
             − Decrease
           </button>
+          <button onClick={() => setType('cost_correction')}
+            style={{ flex: 1, padding: '9px', borderRadius: '8px', border: type === 'cost_correction' ? '1.5px solid #d4881f' : '1.5px solid #e7dfd3', background: type === 'cost_correction' ? '#fef3e2' : 'white', color: type === 'cost_correction' ? '#d4881f' : '#78716c', fontWeight: '700', fontSize: '12px', cursor: 'pointer' }}>
+            ✎ Correct Cost
+          </button>
         </div>
 
-        <div style={{ marginBottom: '10px' }}>
-          <label style={lbl}>Quantity to {type === 'increase' ? 'add' : 'remove'}</label>
-          <input type="number" style={inp} value={quantity} onChange={e => setQuantity(e.target.value)} autoFocus />
-        </div>
+        {type === 'cost_correction' ? (
+          <div style={{ marginBottom: '10px' }}>
+            <label style={lbl}>Correct Unit Cost (for all {currentStock} units currently on hand)</label>
+            <input type="number" style={inp} value={correctedCost} onChange={e => setCorrectedCost(e.target.value)} autoFocus />
+            <div style={{ fontSize: '11px', color: '#a89478', marginTop: '4px' }}>Fixes the actual cost basis of existing stock — this is what FIFO Value uses. Doesn't change quantity.</div>
+          </div>
+        ) : (
+          <div style={{ marginBottom: '10px' }}>
+            <label style={lbl}>Quantity to {type === 'increase' ? 'add' : 'remove'}</label>
+            <input type="number" style={inp} value={quantity} onChange={e => setQuantity(e.target.value)} autoFocus />
+          </div>
+        )}
 
         {type === 'increase' && (
           <div style={{ marginBottom: '10px' }}>
@@ -572,7 +612,7 @@ function StockAdjustmentModal({ shop, part, onClose, onAdjusted }) {
         <div style={{ display: 'flex', gap: '10px' }}>
           <button onClick={onClose} style={{ flex: 1, padding: '10px', background: '#f5f1ea', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '700', color: '#78716c' }}>Cancel</button>
           <button onClick={handleAdjust} disabled={saving}
-            style={{ flex: 1, padding: '10px', background: type === 'increase' ? '#059669' : '#e11d48', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '800' }}>
+            style={{ flex: 1, padding: '10px', background: type === 'increase' ? '#059669' : type === 'cost_correction' ? '#d4881f' : '#e11d48', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '800' }}>
             {saving ? 'Saving...' : 'Confirm'}
           </button>
         </div>

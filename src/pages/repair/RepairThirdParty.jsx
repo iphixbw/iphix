@@ -52,7 +52,8 @@ export default function RepairThirdParty({ shop }) {
     const val = parseFloat(costInput)
     if (isNaN(val) || val < 0) return toast.error('Enter a valid cost')
     try {
-      await supabase.from('repair_third_party_items').update({ cost_price: val }).eq('id', item.id)
+      const { error } = await supabase.from('repair_third_party_items').update({ cost_price: val }).eq('id', item.id)
+      if (error) throw error
       await recalcJobFinancials(item.job_id)
       setEditingId(null)
       toast.success('Cost updated')
@@ -99,11 +100,17 @@ export default function RepairThirdParty({ shop }) {
         }
       }
 
+      const updatedItems = []
+      const failedItems = []
       for (const item of itemsToPay) {
-        await supabase.from('repair_third_party_items').update({
+        const { error } = await supabase.from('repair_third_party_items').update({
           payment_status: 'paid', payment_method: method, paid_at: new Date().toISOString(),
           bank_transaction_id: bankTransactionId,
         }).eq('id', item.id)
+        if (error) { failedItems.push(item.item_name) } else { updatedItems.push(item) }
+      }
+      if (failedItems.length > 0) {
+        toast.error(`Failed to mark as paid: ${failedItems.join(', ')} — their supplier balance was NOT adjusted for these.`)
       }
 
       // Mirror the normal supplier-payment convention (RepairPurchases.jsx): the
@@ -111,8 +118,11 @@ export default function RepairThirdParty({ shop }) {
       // cheques, which get reversed back up in Bank.jsx if the cheque later
       // bounces. A batch can include items from more than one supplier (or none,
       // for untracked/free-text suppliers), so group by supplier_id first.
+      // Only items that actually saved above are included — adjusting the
+      // balance for an item whose status update failed would leave the balance
+      // changed with nothing on record to explain it.
       const bySupplier = {}
-      for (const item of itemsToPay) {
+      for (const item of updatedItems) {
         if (!item.supplier_id) continue
         bySupplier[item.supplier_id] = (bySupplier[item.supplier_id] || 0) + (item.cost_price || 0) * item.quantity
       }
