@@ -131,19 +131,29 @@ function SupplierList({ shop, suppliers, onChanged }) {
     let supplierRow = fresh || s
     if (fresh) setSelected(fresh)
 
-    const [{ data: purchases }, { data: thirdPartyItems }, { data: returns }] = await Promise.all([
-      supabase.from('repair_purchases').select('total, amount_paid').eq('supplier_id', supplierRow.id),
+    const [{ data: purchases }, { data: thirdPartyItems }, { data: returns }, { data: standaloneForCalc }] = await Promise.all([
+      supabase.from('repair_purchases').select('total, initial_payment').eq('supplier_id', supplierRow.id),
       supabase.from('repair_third_party_items').select('cost_price, quantity').eq('supplier_id', supplierRow.id).eq('payment_status', 'pending'),
       supabase.from('repair_purchase_returns').select('total').eq('supplier_id', supplierRow.id).neq('status', 'voided'),
+      supabase.from('repair_supplier_standalone_payments').select('amount').eq('supplier_id', supplierRow.id),
     ])
     // Same self-healing recalc as customers — keeps outstanding_balance
     // resilient to any gap in the incremental adjust-RPC calls (like the one
     // that turned up for customers), rather than trusting it's always been
-    // perfectly kept in sync everywhere.
+    // perfectly kept in sync everywhere. Deliberately mirrors the ledger's
+    // OWN math exactly (same frozen initial_payment per purchase, same full
+    // standalone-payment amounts) rather than using each purchase's live
+    // amount_paid — a standalone payment that gets FIFO-allocated across
+    // several purchases reduces each one's amount_paid AND still counts as
+    // its own full-amount ledger line, so mixing live purchase balances with
+    // full standalone-payment totals would double-count the allocated
+    // portion (or miss it entirely for the unallocated excess) — using the
+    // same frozen/full-amount pairing as the ledger avoids both.
     const trueBalance = (supplierRow.opening_balance || 0)
-      + (purchases || []).reduce((s, p) => s + Math.max(0, (p.total || 0) - (p.amount_paid || 0)), 0)
+      + (purchases || []).reduce((s, p) => s + Math.max(0, (p.total || 0) - (p.initial_payment || 0)), 0)
       + (thirdPartyItems || []).reduce((s, t) => s + (t.cost_price || 0) * (t.quantity || 1), 0)
       - (returns || []).reduce((s, r) => s + (r.total || 0), 0)
+      - (standaloneForCalc || []).reduce((s, p) => s + (p.amount || 0), 0)
     if (trueBalance !== supplierRow.outstanding_balance) {
       const { data: updated } = await supabase.from('repair_suppliers').update({ outstanding_balance: trueBalance }).eq('id', supplierRow.id).select().single()
       if (updated) { supplierRow = updated; setSelected(updated); setSuppliers(ss => ss.map(sp => sp.id === updated.id ? updated : sp)) }

@@ -4,7 +4,7 @@ import toast from 'react-hot-toast'
 import { formatLKR, timeAgo, printPartsSaleReceipt } from '../../lib/repairConstants'
 import { generateRepairSaleNo, generateRepairCustomerNo } from '../../lib/repairHelpers'
 
-import { PartPicker, PartNameAutocomplete } from './RepairInventory'
+import { PartPicker, PartNameAutocomplete, fetchOldestBatchCosts } from './RepairInventory'
 import RepairSaleReturns from './RepairSaleReturns'
 
 export default function RepairSales({ shop }) {
@@ -349,6 +349,7 @@ function NewSaleModal({ shop, onClose, onCreated }) {
   const [newCustomerMobile, setNewCustomerMobile] = useState('')
   const [creatingCustomer, setCreatingCustomer] = useState(false)
   const [parts, setParts] = useState([])
+  const [partCosts, setPartCosts] = useState({})
   const [suppliers, setSuppliers] = useState([])
   const [rows, setRows] = useState([{ part_id: '', quantity: '1', unit_price: '', is_third_party: false, item_name: '', supplier_id: '', supplier_other: '', cost_price: '' }])
   const [paymentMethod, setPaymentMethod] = useState('cash')
@@ -356,6 +357,7 @@ function NewSaleModal({ shop, onClose, onCreated }) {
   const [saving, setSaving] = useState(false)
 
   useEffect(() => { supabase.from('repair_suppliers').select('id, name').order('name').then(({ data }) => setSuppliers(data || [])) }, [])
+  useEffect(() => { fetchOldestBatchCosts().then(setPartCosts) }, [])
 
   useEffect(() => {
     // A plain .select() caps at Supabase's default 1000-row limit — with a large
@@ -594,7 +596,7 @@ function NewSaleModal({ shop, onClose, onCreated }) {
               </>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.7fr 1fr auto', gap: '8px' }}>
-                <PartPicker shop={shop} parts={parts} value={r.part_id}
+                <PartPicker shop={shop} parts={parts} partCosts={partCosts} value={r.part_id}
                   onChange={(id, p) => {
                     setRows(rs => rs.map((row, idx) => idx !== i ? row : { ...row, part_id: id, unit_price: p ? String(p.selling_price || '') : '' }))
                     if (p && !parts.some(pp => pp.id === p.id)) setParts(ps => [...ps, p])

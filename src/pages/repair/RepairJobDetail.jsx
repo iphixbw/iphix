@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../../supabase'
 import toast from 'react-hot-toast'
 import { JOB_STATUSES, PRIORITIES, CHARGE_TYPES, statusMeta, priorityMeta, formatLKR, timeAgo, printJobReceipt, printJobPaymentReceipt } from '../../lib/repairConstants'
-import { PartPicker, PartNameAutocomplete } from './RepairInventory'
+import { PartPicker, PartNameAutocomplete, fetchOldestBatchCosts } from './RepairInventory'
 
 export default function RepairJobDetail({ jobId, shop, onBack }) {
   const [job, setJob] = useState(null)
@@ -683,10 +683,12 @@ function AddPartModal({ shop, parts, jobId, onClose, onAdded }) {
   const [qty, setQty] = useState('1')
   const [price, setPrice] = useState('')
   const [saving, setSaving] = useState(false)
+  const [partCosts, setPartCosts] = useState({})
   const selected = localParts.find(p => p.id === partId)
 
   useEffect(() => { if (selected) setPrice(String(selected.selling_price || '')) }, [partId])
   useEffect(() => { supabase.from('repair_suppliers').select('id, name').order('name').then(({ data }) => setSuppliers(data || [])) }, [])
+  useEffect(() => { fetchOldestBatchCosts().then(setPartCosts) }, [])
 
   async function handleAdd() {
     const q = parseFloat(qty) || 1
@@ -778,7 +780,7 @@ function AddPartModal({ shop, parts, jobId, onClose, onAdded }) {
         ) : (
           <div style={{ marginBottom: '12px' }}>
             <label style={{ fontSize: '11px', color: '#a89478', fontWeight: '700' }}>Part</label>
-            <PartPicker shop={shop} parts={localParts} value={partId}
+            <PartPicker shop={shop} parts={localParts} partCosts={partCosts} value={partId}
               onChange={(id, p) => {
                 setPartId(id)
                 if (p && !localParts.some(lp => lp.id === p.id)) setLocalParts(lps => [...lps, p])

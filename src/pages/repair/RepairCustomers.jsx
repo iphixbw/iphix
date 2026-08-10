@@ -34,6 +34,7 @@ export default function RepairCustomers({ shop, onOpenJob }) {
     setSales(s || [])
 
     const { data: creditReturns } = await supabase.from('repair_sale_returns').select('total').eq('customer_id', c.id).eq('payment_method', 'credit').neq('status', 'voided')
+    const { data: standaloneForCalc } = await supabase.from('repair_customer_standalone_payments').select('amount').eq('customer_id', c.id)
 
     // outstanding_balance is normally kept in sync incrementally (payments,
     // credit sales), but that only works if EVERY code path that changes what
@@ -44,10 +45,16 @@ export default function RepairCustomers({ shop, onOpenJob }) {
     // open, makes this resilient to any gap like that, present or future.
     // Only CREDIT-method returns affect the balance — cash/bank refunds are a
     // pure money movement, same convention as everywhere else this matters.
+    // Standalone payments must be included here too — jobs/sales already
+    // reflect their own direct payments live (balance_due / amount_paid), but
+    // opening_balance is a static field with nothing else to net a standalone
+    // (unallocated) payment against, so leaving this out is exactly what
+    // caused the header to silently ignore every standalone payment ever made.
     const trueBalance = (c.opening_balance || 0)
       + (j || []).filter(job => job.status !== 'voided').reduce((s, job) => s + (job.balance_due || 0), 0)
       + (s || []).reduce((sum, sale) => sum + Math.max(0, (sale.total || 0) - (sale.amount_paid || 0)), 0)
       - (creditReturns || []).reduce((s, r) => s + (r.total || 0), 0)
+      - (standaloneForCalc || []).reduce((s, p) => s + (p.amount || 0), 0)
     let fresh = c
     if (trueBalance !== c.outstanding_balance) {
       const { data: updated } = await supabase.from('repair_customers').update({ outstanding_balance: trueBalance }).eq('id', c.id).select().single()

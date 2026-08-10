@@ -3,8 +3,10 @@ import { supabase } from '../../supabase'
 import toast from 'react-hot-toast'
 import { formatLKR } from '../../lib/repairConstants'
 import { generateRepairPartSku } from '../../lib/repairHelpers'
+import RepairInventoryMovements from './RepairInventoryMovements'
 
 export default function RepairInventory({ shop }) {
+  const [tab, setTab] = useState('parts')
   const [parts, setParts] = useState([])
   const [stockValues, setStockValues] = useState({}) // part_id -> FIFO value
   const [loading, setLoading] = useState(true)
@@ -132,6 +134,19 @@ export default function RepairInventory({ shop }) {
         </div>
       </div>
 
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '18px' }}>
+        {[{ id: 'parts', label: 'Parts' }, { id: 'movements', label: 'Movements' }].map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            style={{ padding: '9px 18px', borderRadius: '10px', border: 'none', background: tab === t.id ? '#1c1917' : '#f5f1ea', color: tab === t.id ? '#f0b23d' : '#78716c', fontWeight: '700', fontSize: '13px', cursor: 'pointer' }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'movements' ? (
+        <RepairInventoryMovements shop={shop} parts={parts} />
+      ) : (
+        <>
       <div style={{ display: 'flex', gap: '10px', marginBottom: '18px', flexWrap: 'wrap' }}>
         <input type="text" placeholder="Search name, SKU, barcode..." value={search} onChange={e => setSearch(e.target.value)}
           style={{ flex: 1, minWidth: '240px', padding: '10px 14px', border: '1.5px solid #e7dfd3', borderRadius: '10px', fontSize: '14px' }} />
@@ -195,6 +210,8 @@ export default function RepairInventory({ shop }) {
       {(showNew || editingPart) && (
         <PartModal shop={shop} part={editingPart} onClose={() => { setShowNew(false); setEditingPart(null) }} onSaved={() => { setShowNew(false); setEditingPart(null); fetchParts() }} />
       )}
+        </>
+      )}
     </div>
   )
 }
@@ -207,7 +224,30 @@ export default function RepairInventory({ shop }) {
 // large catalog. This filters by substring against name AND sku as you type,
 // and offers adding a brand-new part inline if nothing matches.
 // Used by both RepairSales.jsx (Parts Sales) and RepairJobDetail.jsx (job parts).
-export function PartPicker({ shop, parts, value, onChange, placeholder }) {
+// Bulk-computes each part's TRUE FIFO cost — the oldest remaining batch's
+// unit cost, i.e. exactly what the next unit sold/used will actually cost.
+// One paginated fetch of all batches rather than a query per part, same
+// approach as the stock-value fix in fetchParts() below.
+export async function fetchOldestBatchCosts() {
+  let all = [], from = 0
+  const PAGE_SIZE = 1000
+  while (true) {
+    const { data } = await supabase.from('repair_part_batches')
+      .select('part_id, unit_cost, quantity_remaining, created_at').gt('quantity_remaining', 0)
+      .order('created_at', { ascending: true })
+      .range(from, from + PAGE_SIZE - 1)
+    all = all.concat(data || [])
+    if (!data || data.length < PAGE_SIZE) break
+    from += PAGE_SIZE
+  }
+  const costs = {}
+  for (const b of all) {
+    if (!(b.part_id in costs)) costs[b.part_id] = b.unit_cost || 0
+  }
+  return costs
+}
+
+export function PartPicker({ shop, parts, value, onChange, placeholder, partCosts }) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [showAddNew, setShowAddNew] = useState(false)
@@ -222,11 +262,22 @@ export function PartPicker({ shop, parts, value, onChange, placeholder }) {
 
   const inp = { width: '100%', padding: '8px 10px', border: '1.5px solid #e7dfd3', borderRadius: '7px', fontSize: '13px', boxSizing: 'border-box' }
 
+  // FIFO cost shown here is the OLDEST remaining batch's unit cost — the exact
+  // cost this specific unit will actually be charged at if consumed right now
+  // (FIFO always draws oldest-first), not a reference/average price that may
+  // no longer match what's really in stock.
+  const fifoCostFor = (partId) => partCosts?.[partId]
+
   return (
-    <div style={{ position: 'relative' }}>
+    <div style={{ position: 'relative', width: '100%', minWidth: 0 }}>
       {selectedPart ? (
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', background: '#fef3e2', borderRadius: '7px', border: '1.5px solid #e7dfd3', fontSize: '13px' }}>
-          <span style={{ fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedPart.name} ({selectedPart.current_stock || 0} in stock)</span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', background: '#fef3e2', borderRadius: '7px', border: '1.5px solid #e7dfd3', fontSize: '13px', minWidth: 0 }}>
+          <span style={{ fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>
+            {selectedPart.name} ({selectedPart.current_stock || 0} in stock)
+            {partCosts && (
+              <span style={{ color: '#8a7a63', fontWeight: '500' }}> · FIFO cost {fifoCostFor(selectedPart.id) != null ? formatLKR(fifoCostFor(selectedPart.id)) : '—'}</span>
+            )}
+          </span>
           <button onClick={() => { onChange('', null); setQuery('') }} style={{ background: 'none', border: 'none', color: '#e11d48', cursor: 'pointer', fontSize: '13px', flexShrink: 0, marginLeft: '6px' }}>✕</button>
         </div>
       ) : (
@@ -242,7 +293,10 @@ export function PartPicker({ shop, parts, value, onChange, placeholder }) {
                   onMouseEnter={e => e.currentTarget.style.background = '#fdf8f3'}
                   onMouseLeave={e => e.currentTarget.style.background = 'white'}>
                   <div style={{ fontWeight: '600' }}>{p.name}</div>
-                  <div style={{ fontSize: '11px', color: '#a89478' }}>{p.sku} · {p.current_stock || 0} in stock</div>
+                  <div style={{ fontSize: '11px', color: '#a89478' }}>
+                    {p.sku} · {p.current_stock || 0} in stock
+                    {partCosts && <> · FIFO cost {fifoCostFor(p.id) != null ? formatLKR(fifoCostFor(p.id)) : '—'}</>}
+                  </div>
                 </div>
               ))}
               <div onClick={() => { setShowAddNew(true); setOpen(false) }}
