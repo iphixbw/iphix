@@ -30,6 +30,7 @@ export default function RepairInventoryMovements({ shop, parts }) {
 
   async function loadMovements(partId) {
     setLoading(true)
+    setEvents(null)
     const part = parts.find(p => p.id === partId)
     const stock = part?.current_stock || 0
     setCurrentStock(stock)
@@ -137,7 +138,7 @@ export default function RepairInventoryMovements({ shop, parts }) {
         <div style={{ padding: '60px', textAlign: 'center', color: '#a89478', background: 'white', borderRadius: '16px', border: '1px solid #f3ede4' }}>
           Search for a part above to see everything that's happened to its stock.
         </div>
-      ) : loading ? (
+      ) : loading || !events ? (
         <div style={{ padding: '60px', textAlign: 'center', color: '#a89478' }}>Loading movement history...</div>
       ) : (
         <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #f3ede4', overflow: 'hidden' }}>
