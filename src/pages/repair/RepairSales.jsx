@@ -5,12 +5,15 @@ import { formatLKR, timeAgo, printPartsSaleReceipt } from '../../lib/repairConst
 import { generateRepairSaleNo, generateRepairCustomerNo } from '../../lib/repairHelpers'
 
 import { PartPicker, PartNameAutocomplete } from './RepairInventory'
+import RepairSaleReturns from './RepairSaleReturns'
 
 export default function RepairSales({ shop }) {
+  const [tab, setTab] = useState('sales')
   const [sales, setSales] = useState([])
   const [loading, setLoading] = useState(true)
   const [showNew, setShowNew] = useState(false)
   const [payingSale, setPayingSale] = useState(null)
+  const [voidingSale, setVoidingSale] = useState(null)
 
   useEffect(() => { fetchSales() }, [shop?.id])
 
@@ -41,7 +44,18 @@ export default function RepairSales({ shop }) {
         </button>
       </div>
 
-      {loading ? <div style={{ padding: '60px', textAlign: 'center', color: '#a89478' }}>Loading...</div> : (
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '18px' }}>
+        {[{ id: 'sales', label: 'Sales' }, { id: 'returns', label: 'Returns' }].map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            style={{ padding: '9px 18px', borderRadius: '10px', border: 'none', background: tab === t.id ? '#1c1917' : '#f5f1ea', color: tab === t.id ? '#f0b23d' : '#78716c', fontWeight: '700', fontSize: '13px', cursor: 'pointer' }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'returns' ? (
+        <RepairSaleReturns shop={shop} />
+      ) : loading ? <div style={{ padding: '60px', textAlign: 'center', color: '#a89478' }}>Loading...</div> : (
         <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #f3ede4', overflow: 'hidden' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr style={{ background: '#fdf8f3', borderBottom: '2px solid #f3ede4' }}>
@@ -51,7 +65,7 @@ export default function RepairSales({ shop }) {
             </tr></thead>
             <tbody>
               {sales.map((s, i) => (
-                <tr key={s.id} style={{ borderBottom: '1px solid #f8f5f0', background: i % 2 === 0 ? 'white' : '#fdfbf8' }}>
+                <tr key={s.id} style={{ borderBottom: '1px solid #f8f5f0', background: s.status === 'voided' ? '#faf9f7' : i % 2 === 0 ? 'white' : '#fdfbf8', opacity: s.status === 'voided' ? 0.6 : 1 }}>
                   <td style={{ padding: '11px 14px', fontWeight: '700', color: '#d4881f' }}>{s.sale_no}</td>
                   <td style={{ padding: '11px 14px' }}>{s.repair_customers?.name || s.customer_name || 'Walk-in'}</td>
                   <td style={{ padding: '11px 14px', fontSize: '12px', color: '#78716c' }}>{timeAgo(s.created_at)}</td>
@@ -59,16 +73,27 @@ export default function RepairSales({ shop }) {
                   <td style={{ padding: '11px 14px', color: '#059669' }}>{formatLKR(s.amount_paid)}</td>
                   <td style={{ padding: '11px 14px', fontWeight: '700', color: (s.total - s.amount_paid) > 0 ? '#e11d48' : '#94a3b8' }}>{formatLKR(s.total - s.amount_paid)}</td>
                   <td style={{ padding: '11px 14px', fontSize: '12px', textTransform: 'capitalize' }}>{s.payment_method}</td>
-                  <td style={{ padding: '11px 14px' }}><span style={{ padding: '3px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: '700', background: '#f0fdf4', color: '#166534' }}>{s.status}</span></td>
+                  <td style={{ padding: '11px 14px' }}>
+                    {s.status === 'voided'
+                      ? <span style={{ padding: '3px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: '700', background: '#f1f5f9', color: '#64748b' }}>Voided</span>
+                      : <span style={{ padding: '3px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: '700', background: '#f0fdf4', color: '#166534' }}>{s.status}</span>}
+                  </td>
                   <td style={{ padding: '11px 14px', display: 'flex', gap: '6px' }}>
-                    {(s.total - s.amount_paid) > 0 && s.customer_id && (
+                    {s.status !== 'voided' && (s.total - s.amount_paid) > 0 && s.customer_id && (
                       <button onClick={() => setPayingSale(s)} style={{ padding: '4px 10px', background: '#f0fdf4', color: '#059669', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: '700' }}>
                         💵 Pay
                       </button>
                     )}
-                    <button onClick={() => reprintReceipt(s)} style={{ padding: '4px 10px', background: '#fef3e2', color: '#d4881f', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: '700' }}>
-                      🖨 Print
-                    </button>
+                    {s.status !== 'voided' && (
+                      <>
+                        <button onClick={() => reprintReceipt(s)} style={{ padding: '4px 10px', background: '#fef3e2', color: '#d4881f', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: '700' }}>
+                          🖨 Print
+                        </button>
+                        <button onClick={() => setVoidingSale(s)} style={{ padding: '4px 10px', background: '#fef2f2', color: '#e11d48', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: '700' }}>
+                          Void
+                        </button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -80,6 +105,7 @@ export default function RepairSales({ shop }) {
 
       {showNew && <NewSaleModal shop={shop} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); fetchSales() }} />}
       {payingSale && <SalePaymentModal shop={shop} sale={payingSale} onClose={() => setPayingSale(null)} onPaid={() => { setPayingSale(null); fetchSales() }} />}
+      {voidingSale && <VoidSaleModal shop={shop} sale={voidingSale} onClose={() => setVoidingSale(null)} onVoided={() => { setVoidingSale(null); fetchSales() }} />}
     </div>
   )
 }
@@ -108,6 +134,11 @@ function SalePaymentModal({ shop, sale, onClose, onPaid }) {
       const newPaid = (sale.amount_paid || 0) + enteredAmount
       const { error } = await supabase.from('repair_sales').update({ amount_paid: newPaid }).eq('id', sale.id)
       if (error) throw error
+
+      await supabase.from('repair_sale_payments').insert({
+        sale_id: sale.id, amount: enteredAmount, payment_method: method,
+        bank_account_id: (method === 'card' || method === 'bank') ? bankAccountId : null,
+      })
 
       // Must not adjust the customer's balance if the sale itself failed to
       // update — same reasoning as everywhere else in this app: never let a
@@ -156,6 +187,153 @@ function SalePaymentModal({ shop, sale, onClose, onPaid }) {
           <button onClick={onClose} style={{ flex: 1, padding: '10px', background: '#f5f1ea', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '700' }}>Cancel</button>
           <button onClick={handlePay} disabled={saving} style={{ flex: 1, padding: '10px', background: 'linear-gradient(135deg,#f0b23d,#d4881f)', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '800' }}>{saving ? 'Saving...' : 'Receive Payment'}</button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// Voiding a sale means it should never have happened — undo it precisely via
+// compensating entries (never delete/rewrite the original history), mirroring
+// exactly how Void Job already works: restock every item, reverse every
+// payment individually by its own actual method/account (via
+// repair_sale_payments, so a sale paid partly in cash and partly by bank
+// transfer later reverses each correctly), reverse any linked 3rd-party
+// items, and undo the remaining credit balance this sale is still carrying.
+function VoidSaleModal({ shop, sale, onClose, onVoided }) {
+  const [reason, setReason] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [blockingReturns, setBlockingReturns] = useState(null)
+  const [preview, setPreview] = useState(null)
+
+  useEffect(() => {
+    async function load() {
+      const { data: activeReturns } = await supabase.from('repair_sale_returns').select('return_no').eq('sale_id', sale.id).neq('status', 'voided')
+      if (activeReturns?.length) { setBlockingReturns(activeReturns); return }
+      const [{ data: items }, { data: tpItems }, { data: payments }] = await Promise.all([
+        supabase.from('repair_sale_items').select('*').eq('sale_id', sale.id),
+        supabase.from('repair_third_party_items').select('*').eq('sale_id', sale.id),
+        supabase.from('repair_sale_payments').select('*').eq('sale_id', sale.id),
+      ])
+      setPreview({ items: items || [], tpItems: tpItems || [], payments: payments || [] })
+    }
+    load()
+  }, [sale.id])
+
+  async function handleVoid() {
+    setSaving(true)
+    try {
+      const { items, tpItems, payments } = preview
+
+      const restoredSoFar = []
+      try {
+        for (const it of items) {
+          const { error: returnError } = await supabase.rpc('repair_fifo_return', { p_part_id: it.part_id, p_quantity: it.quantity, p_unit_cost: it.unit_cost || 0 })
+          if (returnError) throw new Error(returnError.message)
+          const { error: addError } = await supabase.rpc('repair_add_part_stock', { p_part_id: it.part_id, p_quantity: it.quantity })
+          if (addError) throw new Error(addError.message)
+          restoredSoFar.push({ part_id: it.part_id, quantity: it.quantity })
+        }
+      } catch (stockErr) {
+        for (const c of restoredSoFar.reverse()) {
+          await supabase.rpc('repair_fifo_consume', { p_part_id: c.part_id, p_quantity: c.quantity })
+          await supabase.rpc('repair_deduct_part_stock', { p_part_id: c.part_id, p_quantity: c.quantity })
+        }
+        throw stockErr
+      }
+      await supabase.from('repair_sale_items').delete().eq('sale_id', sale.id)
+
+      // 3rd-party items: if already settled, the supplier balance is already
+      // net-zero (raised at creation, reduced at settlement) — only the
+      // money paid out needs reversing. If still pending, the supplier
+      // balance was raised at creation and never settled, so that needs
+      // reversing directly.
+      for (const t of tpItems) {
+        const amount = (t.cost_price || 0) * t.quantity
+        if (t.payment_status === 'paid' && amount > 0.009) {
+          if (t.payment_method === 'cash') {
+            await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'payment', amount, reference: sale.sale_no, notes: `Sale voided — 3rd-party item reversed: ${t.item_name}` })
+          } else if (t.bank_transaction_id) {
+            const { data: origTx } = await supabase.from('bank_transactions').select('bank_account_id').eq('id', t.bank_transaction_id).single()
+            if (origTx?.bank_account_id) {
+              const { data: bank } = await supabase.from('bank_accounts').select('balance').eq('id', origTx.bank_account_id).single()
+              await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) + amount }).eq('id', origTx.bank_account_id)
+              await supabase.from('bank_transactions').insert({ bank_account_id: origTx.bank_account_id, type: 'deposit', amount, reference: `Sale voided: ${sale.sale_no}`, notes: `3rd-party item reversed: ${t.item_name}` })
+            }
+          }
+        } else if (t.supplier_id && amount > 0.009) {
+          await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: t.supplier_id, p_delta: -amount })
+        }
+      }
+      await supabase.from('repair_third_party_items').delete().eq('sale_id', sale.id)
+
+      // Every payment this sale ever received, reversed individually by its
+      // actual method — bank_account_id set means it really moved through a
+      // bank account (SalePaymentModal/ReceivePaymentModal); unset means it
+      // only ever went through the cash ledger (including the sale's own
+      // creation-time payment, which — regardless of the method label chosen
+      // then — was always recorded there, a pre-existing simplification this
+      // reversal deliberately matches rather than guesses around).
+      for (const p of payments) {
+        if (p.bank_account_id) {
+          const { data: bank } = await supabase.from('bank_accounts').select('balance').eq('id', p.bank_account_id).single()
+          await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) - p.amount }).eq('id', p.bank_account_id)
+          await supabase.from('bank_transactions').insert({ bank_account_id: p.bank_account_id, type: 'withdrawal', amount: p.amount, reference: `Sale voided: ${sale.sale_no}`, notes: `Payment reversed (${p.payment_method})` })
+        } else {
+          await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'sale', amount: -p.amount, reference: sale.sale_no, notes: 'Sale voided — payment reversed' })
+        }
+      }
+      await supabase.from('repair_sale_payments').delete().eq('sale_id', sale.id)
+
+      // Whatever's still unpaid on this sale is currently reflected as debt
+      // in the customer's balance (added at creation for a credit sale, then
+      // reduced by each payment above as it came in) — remove exactly that
+      // remainder. The payments above already reversed their own portion via
+      // cash/bank; this is the separate balance dimension, not double-counted.
+      const stillDue = (sale.total || 0) - (sale.amount_paid || 0)
+      if (sale.customer_id && stillDue > 0.009) {
+        await supabase.rpc('repair_adjust_customer_balance', { p_customer_id: sale.customer_id, p_delta: -stillDue })
+      }
+
+      await supabase.from('repair_sales').update({
+        status: 'voided', subtotal: 0, total: 0, amount_paid: 0,
+        voided_at: new Date().toISOString(), void_reason: reason || null,
+      }).eq('id', sale.id)
+
+      toast.success('Sale voided — all related transactions reversed')
+      onVoided()
+    } catch (e) { toast.error('Failed to void: ' + e.message) }
+    setSaving(false)
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: '20px' }}>
+      <div style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '100%', maxWidth: '440px' }}>
+        <h3 style={{ fontSize: '16px', fontWeight: '800', margin: '0 0 4px', color: '#e11d48' }}>Void Sale {sale.sale_no}?</h3>
+        {blockingReturns ? (
+          <>
+            <p style={{ fontSize: '13px', color: '#44403c', margin: '0 0 16px' }}>
+              Can't void — {blockingReturns.length} active return{blockingReturns.length !== 1 ? 's' : ''} ({blockingReturns.map(r => r.return_no).join(', ')}) reference this sale. Void {blockingReturns.length !== 1 ? 'those' : 'that'} first.
+            </p>
+            <button onClick={onClose} style={{ width: '100%', padding: '10px', background: '#f5f1ea', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '700' }}>Close</button>
+          </>
+        ) : !preview ? (
+          <p style={{ fontSize: '13px', color: '#8a7a63' }}>Checking...</p>
+        ) : (
+          <>
+            <p style={{ fontSize: '12px', color: '#8a7a63', margin: '0 0 14px' }}>This cannot be undone. The following will be reversed:</p>
+            <ul style={{ fontSize: '13px', color: '#44403c', margin: '0 0 16px', paddingLeft: '18px', lineHeight: '1.7' }}>
+              <li>{preview.items.length} part{preview.items.length !== 1 ? 's' : ''} — stock restored</li>
+              {preview.tpItems.length > 0 && <li>{preview.tpItems.length} 3rd-party item{preview.tpItems.length !== 1 ? 's' : ''}</li>}
+              <li>{preview.payments.length} payment{preview.payments.length !== 1 ? 's' : ''} — {formatLKR(preview.payments.reduce((s, p) => s + p.amount, 0))} reversed</li>
+            </ul>
+            <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Reason (optional)</label>
+            <textarea style={{ width: '100%', padding: '9px 12px', border: '1.5px solid #e7dfd3', borderRadius: '8px', fontSize: '13px', boxSizing: 'border-box', minHeight: '60px', marginBottom: '16px', marginTop: '5px' }} value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. entered in error" />
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button onClick={onClose} style={{ flex: 1, padding: '10px', background: '#f5f1ea', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '700' }}>Cancel</button>
+              <button onClick={handleVoid} disabled={saving} style={{ flex: 1, padding: '10px', background: '#e11d48', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '800' }}>{saving ? 'Voiding...' : 'Void Sale'}</button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
@@ -269,6 +447,14 @@ function NewSaleModal({ shop, onClose, onCreated }) {
         subtotal: total, total, payment_method: paymentMethod, amount_paid: paid, status: 'confirmed',
       }).select().single()
       if (error) throw error
+
+      if (paid > 0) {
+        await supabase.from('repair_sale_payments').insert({
+          sale_id: sale.id, amount: paid, payment_method: paymentMethod,
+          bank_account_id: null,
+          notes: 'Paid at sale',
+        })
+      }
 
       for (const r of validRows) {
         const qty = parseFloat(r.quantity), price = parseFloat(r.unit_price) || 0

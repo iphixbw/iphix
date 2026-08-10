@@ -36,6 +36,12 @@ export async function generateRepairReturnNo() {
   return data
 }
 
+export async function generateRepairSaleReturnNo() {
+  const { data, error } = await supabase.rpc('generate_repair_sale_return_no')
+  if (error) throw error
+  return data
+}
+
 export async function generateRepairPartSku() {
   const { data, error } = await supabase.rpc('generate_repair_part_sku')
   if (error) throw error

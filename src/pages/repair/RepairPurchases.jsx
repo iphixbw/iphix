@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 import { formatLKR, timeAgo } from '../../lib/repairConstants'
 import { generateRepairPurchaseNo, generateRepairSupplierNo } from '../../lib/repairHelpers'
 import { PartModal } from './RepairInventory'
+import RepairPurchaseReturns from './RepairPurchaseReturns'
 
 export default function RepairPurchases({ shop }) {
   const [tab, setTab] = useState('purchases')
@@ -13,6 +14,7 @@ export default function RepairPurchases({ shop }) {
   const [showNew, setShowNew] = useState(false)
   const [viewing, setViewing] = useState(null)
   const [viewItems, setViewItems] = useState([])
+  const [voidingPurchase, setVoidingPurchase] = useState(null)
 
   useEffect(() => { fetchAll() }, [shop?.id])
 
@@ -46,7 +48,7 @@ export default function RepairPurchases({ shop }) {
       </div>
 
       <div style={{ display: 'flex', gap: '6px', marginBottom: '18px' }}>
-        {[{ id: 'purchases', label: 'Purchases' }, { id: 'suppliers', label: 'Suppliers' }].map(t => (
+        {[{ id: 'purchases', label: 'Purchases' }, { id: 'suppliers', label: 'Suppliers' }, { id: 'returns', label: 'Returns' }].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
             style={{ padding: '9px 18px', borderRadius: '10px', border: 'none', background: tab === t.id ? '#1c1917' : '#f5f1ea', color: tab === t.id ? '#f0b23d' : '#78716c', fontWeight: '700', fontSize: '13px', cursor: 'pointer' }}>
             {t.label}
@@ -58,32 +60,46 @@ export default function RepairPurchases({ shop }) {
         <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #f3ede4', overflow: 'hidden' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr style={{ background: '#fdf8f3', borderBottom: '2px solid #f3ede4' }}>
-              {['Purchase No', 'Supplier', 'Date', 'Total', 'Paid', 'Balance', 'Status'].map(h => (
+              {['Purchase No', 'Supplier', 'Date', 'Total', 'Paid', 'Balance', 'Status', ''].map(h => (
                 <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: '10px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>{h}</th>
               ))}
             </tr></thead>
             <tbody>
               {purchases.map((p, i) => (
-                <tr key={p.id} onClick={() => viewPurchase(p)} style={{ borderBottom: '1px solid #f8f5f0', cursor: 'pointer', background: i % 2 === 0 ? 'white' : '#fdfbf8' }}>
-                  <td style={{ padding: '11px 14px', fontWeight: '700', color: '#d4881f' }}>{p.purchase_no}</td>
-                  <td style={{ padding: '11px 14px' }}>{p.repair_suppliers?.name || '—'}</td>
-                  <td style={{ padding: '11px 14px', fontSize: '12px', color: '#78716c' }}>{timeAgo(p.created_at)}</td>
-                  <td style={{ padding: '11px 14px', fontWeight: '700' }}>{formatLKR(p.total)}</td>
-                  <td style={{ padding: '11px 14px', color: '#059669' }}>{formatLKR(p.amount_paid)}</td>
-                  <td style={{ padding: '11px 14px', color: p.credit_amount > 0 ? '#e11d48' : '#94a3b8', fontWeight: '700' }}>{formatLKR(p.credit_amount)}</td>
-                  <td style={{ padding: '11px 14px' }}><span style={{ padding: '3px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: '700', background: '#f0fdf4', color: '#166534' }}>{p.status}</span></td>
+                <tr key={p.id} style={{ borderBottom: '1px solid #f8f5f0', background: p.status === 'voided' ? '#faf9f7' : i % 2 === 0 ? 'white' : '#fdfbf8', opacity: p.status === 'voided' ? 0.6 : 1 }}>
+                  <td onClick={() => viewPurchase(p)} style={{ padding: '11px 14px', fontWeight: '700', color: '#d4881f', cursor: 'pointer' }}>{p.purchase_no}</td>
+                  <td onClick={() => viewPurchase(p)} style={{ padding: '11px 14px', cursor: 'pointer' }}>{p.repair_suppliers?.name || '—'}</td>
+                  <td onClick={() => viewPurchase(p)} style={{ padding: '11px 14px', fontSize: '12px', color: '#78716c', cursor: 'pointer' }}>{timeAgo(p.created_at)}</td>
+                  <td onClick={() => viewPurchase(p)} style={{ padding: '11px 14px', fontWeight: '700', cursor: 'pointer' }}>{formatLKR(p.total)}</td>
+                  <td onClick={() => viewPurchase(p)} style={{ padding: '11px 14px', color: '#059669', cursor: 'pointer' }}>{formatLKR(p.amount_paid)}</td>
+                  <td onClick={() => viewPurchase(p)} style={{ padding: '11px 14px', color: p.credit_amount > 0 ? '#e11d48' : '#94a3b8', fontWeight: '700', cursor: 'pointer' }}>{formatLKR(p.credit_amount)}</td>
+                  <td onClick={() => viewPurchase(p)} style={{ padding: '11px 14px', cursor: 'pointer' }}>
+                    {p.status === 'voided'
+                      ? <span style={{ padding: '3px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: '700', background: '#f1f5f9', color: '#64748b' }}>Voided</span>
+                      : <span style={{ padding: '3px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: '700', background: '#f0fdf4', color: '#166534' }}>{p.status}</span>}
+                  </td>
+                  <td style={{ padding: '11px 14px' }}>
+                    {p.status !== 'voided' && (
+                      <button onClick={() => setVoidingPurchase(p)} style={{ padding: '4px 10px', background: '#fef2f2', color: '#e11d48', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: '700' }}>
+                        Void
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
           {purchases.length === 0 && <div style={{ padding: '48px', textAlign: 'center', color: '#a89478' }}>No purchases yet.</div>}
         </div>
-      ) : (
+      ) : tab === 'suppliers' ? (
         <SupplierList shop={shop} suppliers={suppliers} onChanged={fetchAll} />
+      ) : (
+        <RepairPurchaseReturns shop={shop} />
       )}
 
       {showNew && <NewPurchaseModal shop={shop} suppliers={suppliers} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); fetchAll() }} onSuppliersChanged={fetchAll} />}
       {viewing && <ViewPurchaseModal purchase={viewing} items={viewItems} onClose={() => setViewing(null)} />}
+      {voidingPurchase && <VoidPurchaseModal shop={shop} purchase={voidingPurchase} onClose={() => setVoidingPurchase(null)} onVoided={() => { setVoidingPurchase(null); fetchAll() }} />}
     </div>
   )
 }
@@ -112,17 +128,37 @@ function SupplierList({ shop, suppliers, onChanged }) {
   async function openSupplier(s) {
     setSelected(s)
     const { data: fresh } = await supabase.from('repair_suppliers').select('*').eq('id', s.id).single()
-    const supplierRow = fresh || s
+    let supplierRow = fresh || s
     if (fresh) setSelected(fresh)
+
+    const [{ data: purchases }, { data: thirdPartyItems }, { data: returns }] = await Promise.all([
+      supabase.from('repair_purchases').select('total, amount_paid').eq('supplier_id', supplierRow.id),
+      supabase.from('repair_third_party_items').select('cost_price, quantity').eq('supplier_id', supplierRow.id).eq('payment_status', 'pending'),
+      supabase.from('repair_purchase_returns').select('total').eq('supplier_id', supplierRow.id).neq('status', 'voided'),
+    ])
+    // Same self-healing recalc as customers — keeps outstanding_balance
+    // resilient to any gap in the incremental adjust-RPC calls (like the one
+    // that turned up for customers), rather than trusting it's always been
+    // perfectly kept in sync everywhere.
+    const trueBalance = (supplierRow.opening_balance || 0)
+      + (purchases || []).reduce((s, p) => s + Math.max(0, (p.total || 0) - (p.amount_paid || 0)), 0)
+      + (thirdPartyItems || []).reduce((s, t) => s + (t.cost_price || 0) * (t.quantity || 1), 0)
+      - (returns || []).reduce((s, r) => s + (r.total || 0), 0)
+    if (trueBalance !== supplierRow.outstanding_balance) {
+      const { data: updated } = await supabase.from('repair_suppliers').update({ outstanding_balance: trueBalance }).eq('id', supplierRow.id).select().single()
+      if (updated) { supplierRow = updated; setSelected(updated); setSuppliers(ss => ss.map(sp => sp.id === updated.id ? updated : sp)) }
+    }
+
     await loadStatement(supplierRow)
   }
 
   async function loadStatement(supplier) {
     const supplierId = supplier.id
-    const [{ data: purchases }, { data: payments }, { data: thirdPartyItems }] = await Promise.all([
+    const [{ data: purchases }, { data: payments }, { data: thirdPartyItems }, { data: returns }] = await Promise.all([
       supabase.from('repair_purchases').select('*').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
       supabase.from('repair_supplier_standalone_payments').select('*, bank_accounts(name)').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
       supabase.from('repair_third_party_items').select('*, repair_jobs(job_no), repair_sales(sale_no)').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
+      supabase.from('repair_purchase_returns').select('*').eq('supplier_id', supplierId).neq('status', 'voided').order('created_at', { ascending: true }),
     ])
     const events = []
     if (supplier.opening_balance > 0) {
@@ -135,6 +171,10 @@ function SupplierList({ shop, suppliers, onChanged }) {
     ;(purchases || []).forEach(p => events.push({
       date: p.created_at, type: 'purchase', label: `Purchase ${p.purchase_no}`,
       debit: p.total, credit: p.initial_payment || 0, ref: p.purchase_no,
+    }))
+    ;(returns || []).forEach(r => events.push({
+      date: r.created_at, type: 'return', label: `Return ${r.return_no}`,
+      debit: 0, credit: r.total, ref: r.return_no,
     }))
     ;(thirdPartyItems || []).forEach(t => {
       const lineTotal = (t.cost_price || 0) * (t.quantity || 1)
@@ -517,6 +557,7 @@ function NewPurchaseModal({ shop, suppliers, onClose, onCreated, onSuppliersChan
       const { data: purchase, error } = await supabase.from('repair_purchases').insert({
         purchase_no, supplier_id: supplierId, shop_id: shop?.id || null, status: 'confirmed',
         subtotal, total: subtotal, payment_method: paymentMethod, amount_paid: paid, credit_amount: credit, initial_payment: paid,
+        bank_account_id: paymentMethod === 'bank' ? bankAccountId : null,
       }).select().single()
       if (error) throw error
 
@@ -655,6 +696,163 @@ function ViewPurchaseModal({ purchase, items, onClose }) {
           </tbody>
         </table>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '15px', fontWeight: '800', color: '#1c1917' }}><span>Total</span><span>{formatLKR(purchase.total)}</span></div>
+      </div>
+    </div>
+  )
+}
+
+// Voiding a purchase means it should never have happened — undo it precisely
+// via compensating entries, mirroring Void Job/Void Sale exactly. Unlike
+// sales, purchases can have a standalone payment FIFO-split across several
+// purchases at once (repair_supplier_payment_allocations) — unwinding one
+// purchase's share of a payment that also partly paid off other purchases
+// isn't something that can be done safely in general, so voiding is only
+// allowed while amount_paid still equals initial_payment (the amount paid
+// at creation) — i.e. nothing has been paid toward it since. If a payment
+// has been applied, it needs to be reasoned through manually rather than
+// risk an incorrect automatic reversal.
+function VoidPurchaseModal({ shop, purchase, onClose, onVoided }) {
+  const [reason, setReason] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [blockingReturns, setBlockingReturns] = useState(null)
+  const [blockedByPayment, setBlockedByPayment] = useState(false)
+  const [blockedByMissingBank, setBlockedByMissingBank] = useState(false)
+  const [preview, setPreview] = useState(null)
+  const [fresh, setFresh] = useState(null)
+
+  useEffect(() => {
+    async function load() {
+      const { data: freshPurchase } = await supabase.from('repair_purchases').select('*').eq('id', purchase.id).single()
+      setFresh(freshPurchase || purchase)
+
+      const { data: activeReturns } = await supabase.from('repair_purchase_returns').select('return_no').eq('purchase_id', purchase.id).neq('status', 'voided')
+      if (activeReturns?.length) { setBlockingReturns(activeReturns); return }
+
+      const initial = freshPurchase?.initial_payment || 0
+      const paid = freshPurchase?.amount_paid || 0
+      if (Math.abs(paid - initial) > 0.009) { setBlockedByPayment(true); return }
+
+      // This purchase predates bank_account_id being recorded at creation —
+      // there's no way to know which account to refund into. Checked here,
+      // before any reversal starts, so a block can never leave stock/balance
+      // already reversed while the purchase record still says confirmed.
+      if (freshPurchase?.payment_method === 'bank' && !freshPurchase?.bank_account_id && initial > 0.009) {
+        setBlockedByMissingBank(true); return
+      }
+
+      const { data: items } = await supabase.from('repair_purchase_items').select('*').eq('purchase_id', purchase.id)
+      setPreview({ items: items || [] })
+    }
+    load()
+  }, [purchase.id])
+
+  async function handleVoid() {
+    setSaving(true)
+    try {
+      const { items } = preview
+
+      // Stock sufficiency check up front — can't reverse stock that's since
+      // been sold or used on a job.
+      for (const it of items) {
+        const { data: part } = await supabase.from('repair_parts').select('current_stock, name').eq('id', it.part_id).single()
+        if (part && it.quantity > (part.current_stock || 0)) {
+          toast.error(`Can't void — only ${part.current_stock || 0} of "${part.name}" left in stock (some may have been used since this purchase)`)
+          setSaving(false)
+          return
+        }
+      }
+
+      const consumedSoFar = []
+      try {
+        for (const it of items) {
+          const { data: costConsumed, error: consumeError } = await supabase.rpc('repair_fifo_consume', { p_part_id: it.part_id, p_quantity: it.quantity })
+          if (consumeError) throw new Error(consumeError.message)
+          const { error: deductError } = await supabase.rpc('repair_deduct_part_stock', { p_part_id: it.part_id, p_quantity: it.quantity })
+          if (deductError) throw new Error(deductError.message)
+          consumedSoFar.push({ part_id: it.part_id, quantity: it.quantity, avgCost: it.quantity > 0 ? (costConsumed || 0) / it.quantity : 0 })
+        }
+      } catch (stockErr) {
+        for (const c of consumedSoFar.reverse()) {
+          await supabase.rpc('repair_fifo_return', { p_part_id: c.part_id, p_quantity: c.quantity, p_unit_cost: c.avgCost })
+          await supabase.rpc('repair_add_part_stock', { p_part_id: c.part_id, p_quantity: c.quantity })
+        }
+        throw stockErr
+      }
+      await supabase.from('repair_purchase_items').delete().eq('purchase_id', purchase.id)
+
+      // Reverse the debt this purchase added (total minus what was paid at
+      // creation) — the same amount that was added when it was created.
+      const debtAdded = (fresh.total || 0) - (fresh.initial_payment || 0)
+      if (debtAdded > 0.009) {
+        await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: fresh.supplier_id, p_delta: -debtAdded })
+      }
+
+      // Refund whatever was paid at creation, via however it was originally paid.
+      const initialPayment = fresh.initial_payment || 0
+      if (initialPayment > 0.009) {
+        if (fresh.payment_method === 'cash') {
+          await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'refund', amount: initialPayment, reference: fresh.purchase_no, notes: 'Purchase voided' })
+        } else if (fresh.payment_method === 'bank' && fresh.bank_account_id) {
+          const { data: bank } = await supabase.from('bank_accounts').select('balance').eq('id', fresh.bank_account_id).single()
+          await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) + initialPayment }).eq('id', fresh.bank_account_id)
+          await supabase.from('bank_transactions').insert({ bank_account_id: fresh.bank_account_id, type: 'deposit', amount: initialPayment, reference: `Purchase voided: ${fresh.purchase_no}`, notes: '' })
+        }
+      }
+
+      await supabase.from('repair_purchases').update({
+        status: 'voided', subtotal: 0, total: 0, amount_paid: 0, credit_amount: 0, initial_payment: 0,
+        voided_at: new Date().toISOString(), void_reason: reason || null,
+      }).eq('id', purchase.id)
+
+      toast.success('Purchase voided — all related transactions reversed')
+      onVoided()
+    } catch (e) { toast.error('Failed to void: ' + e.message) }
+    setSaving(false)
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: '20px' }}>
+      <div style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '100%', maxWidth: '440px' }}>
+        <h3 style={{ fontSize: '16px', fontWeight: '800', margin: '0 0 4px', color: '#e11d48' }}>Void Purchase {purchase.purchase_no}?</h3>
+        {blockingReturns ? (
+          <>
+            <p style={{ fontSize: '13px', color: '#44403c', margin: '0 0 16px' }}>
+              Can't void — {blockingReturns.length} active return{blockingReturns.length !== 1 ? 's' : ''} ({blockingReturns.map(r => r.return_no).join(', ')}) reference this purchase. Void {blockingReturns.length !== 1 ? 'those' : 'that'} first.
+            </p>
+            <button onClick={onClose} style={{ width: '100%', padding: '10px', background: '#f5f1ea', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '700' }}>Close</button>
+          </>
+        ) : blockedByPayment ? (
+          <>
+            <p style={{ fontSize: '13px', color: '#44403c', margin: '0 0 16px' }}>
+              Can't void automatically — a payment has been applied to this purchase since it was created (possibly split across several purchases via a supplier payment). Reversing that safely needs to be done manually. Let your admin know if this needs sorting out.
+            </p>
+            <button onClick={onClose} style={{ width: '100%', padding: '10px', background: '#f5f1ea', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '700' }}>Close</button>
+          </>
+        ) : blockedByMissingBank ? (
+          <>
+            <p style={{ fontSize: '13px', color: '#44403c', margin: '0 0 16px' }}>
+              Can't void — this purchase was paid by bank transfer, but it predates this app tracking which account was used, so there's no way to know where to refund {formatLKR(fresh?.initial_payment || 0)}. Nothing has been changed. Let your admin know if this needs sorting out manually.
+            </p>
+            <button onClick={onClose} style={{ width: '100%', padding: '10px', background: '#f5f1ea', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '700' }}>Close</button>
+          </>
+        ) : !preview ? (
+          <p style={{ fontSize: '13px', color: '#8a7a63' }}>Checking...</p>
+        ) : (
+          <>
+            <p style={{ fontSize: '12px', color: '#8a7a63', margin: '0 0 14px' }}>This cannot be undone. The following will be reversed:</p>
+            <ul style={{ fontSize: '13px', color: '#44403c', margin: '0 0 16px', paddingLeft: '18px', lineHeight: '1.7' }}>
+              <li>{preview.items.length} part{preview.items.length !== 1 ? 's' : ''} — stock taken back out</li>
+              <li>{formatLKR((fresh.total || 0) - (fresh.initial_payment || 0))} removed from supplier balance</li>
+              {(fresh.initial_payment || 0) > 0 && <li>{formatLKR(fresh.initial_payment)} refunded ({fresh.payment_method})</li>}
+            </ul>
+            <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Reason (optional)</label>
+            <textarea style={{ width: '100%', padding: '9px 12px', border: '1.5px solid #e7dfd3', borderRadius: '8px', fontSize: '13px', boxSizing: 'border-box', minHeight: '60px', marginBottom: '16px', marginTop: '5px' }} value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. entered in error" />
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button onClick={onClose} style={{ flex: 1, padding: '10px', background: '#f5f1ea', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '700' }}>Cancel</button>
+              <button onClick={handleVoid} disabled={saving} style={{ flex: 1, padding: '10px', background: '#e11d48', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '800' }}>{saving ? 'Voiding...' : 'Void Purchase'}</button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )

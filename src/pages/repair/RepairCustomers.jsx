@@ -33,6 +33,8 @@ export default function RepairCustomers({ shop, onOpenJob }) {
     setJobs(j || [])
     setSales(s || [])
 
+    const { data: creditReturns } = await supabase.from('repair_sale_returns').select('total').eq('customer_id', c.id).eq('payment_method', 'credit').neq('status', 'voided')
+
     // outstanding_balance is normally kept in sync incrementally (payments,
     // credit sales), but that only works if EVERY code path that changes what
     // a customer owes remembers to call the adjust RPC — job creation and job
@@ -40,9 +42,12 @@ export default function RepairCustomers({ shop, onOpenJob }) {
     // from reality with nothing to catch it. Recalculating from scratch here,
     // the same way job balances and FIFO stock values already self-heal on
     // open, makes this resilient to any gap like that, present or future.
+    // Only CREDIT-method returns affect the balance — cash/bank refunds are a
+    // pure money movement, same convention as everywhere else this matters.
     const trueBalance = (c.opening_balance || 0)
       + (j || []).filter(job => job.status !== 'voided').reduce((s, job) => s + (job.balance_due || 0), 0)
       + (s || []).reduce((sum, sale) => sum + Math.max(0, (sale.total || 0) - (sale.amount_paid || 0)), 0)
+      - (creditReturns || []).reduce((s, r) => s + (r.total || 0), 0)
     let fresh = c
     if (trueBalance !== c.outstanding_balance) {
       const { data: updated } = await supabase.from('repair_customers').update({ outstanding_balance: trueBalance }).eq('id', c.id).select().single()
@@ -50,9 +55,14 @@ export default function RepairCustomers({ shop, onOpenJob }) {
     }
 
     const jobIds = (j || []).map(job => job.id)
-    const [{ data: jobPayments }, { data: standalone }] = await Promise.all([
+    const [{ data: jobPayments }, { data: standalone }, { data: saleReturns }] = await Promise.all([
       jobIds.length ? supabase.from('repair_job_payments').select('*').in('job_id', jobIds) : Promise.resolve({ data: [] }),
       supabase.from('repair_customer_standalone_payments').select('*, bank_accounts(name)').eq('customer_id', c.id),
+      // Only credit-method returns show here — cash/bank refunds don't touch
+      // the balance, so including them would make this ledger's own running
+      // total diverge from what's actually stored, recreating the exact bug
+      // this self-heal exists to prevent.
+      supabase.from('repair_sale_returns').select('*').eq('customer_id', c.id).eq('payment_method', 'credit').neq('status', 'voided'),
     ])
 
     // Build a chronological activity statement across jobs + sales + their payments
@@ -80,6 +90,9 @@ export default function RepairCustomers({ shop, onOpenJob }) {
     })
     ;(standalone || []).forEach(sp => {
       events.push({ date: sp.created_at, label: `Payment (${sp.payment_method}${sp.bank_accounts?.name ? ' — ' + sp.bank_accounts.name : ''})`, debit: 0, credit: sp.amount, type: 'payment' })
+    })
+    ;(saleReturns || []).forEach(r => {
+      events.push({ date: r.created_at, label: `Return ${r.return_no}`, debit: 0, credit: r.total, type: 'return' })
     })
     events.sort((a, b) => new Date(a.date) - new Date(b.date))
     let running = 0
@@ -297,6 +310,10 @@ function ReceivePaymentModal({ shop, customer, jobs, sales, onClose, onPaid }) {
         } else {
           const newPaid = (item.amount_paid || 0) + take
           await supabase.from('repair_sales').update({ amount_paid: newPaid }).eq('id', item.id)
+          await supabase.from('repair_sale_payments').insert({
+            sale_id: item.id, amount: take, payment_method: method,
+            bank_account_id: (method === 'card' || method === 'bank') ? bankAccountId : null,
+          })
         }
         applied.push({ ...item, applied: take })
         remaining -= take
