@@ -375,15 +375,21 @@ function VoidSaleReturnModal({ shop, ret, onClose, onVoided }) {
       }
 
       // Reverse the balance/cash effect, opposite direction from how the
-      // return originally recorded it.
+      // return originally recorded it. Checked so a failure here stops
+      // before the return gets marked voided below — otherwise it would look
+      // successfully reversed while the money/balance effect silently wasn't.
       if (ret.payment_method === 'credit') {
-        await supabase.rpc('repair_adjust_customer_balance', { p_customer_id: ret.customer_id, p_delta: ret.total })
+        const { error: balErr } = await supabase.rpc('repair_adjust_customer_balance', { p_customer_id: ret.customer_id, p_delta: ret.total })
+        if (balErr) throw balErr
       } else if (ret.payment_method === 'cash') {
-        await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'refund', amount: ret.total, reference: ret.return_no, notes: 'Sale return voided' })
+        const { error: cashErr } = await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'refund', amount: ret.total, reference: ret.return_no, notes: 'Sale return voided' })
+        if (cashErr) throw cashErr
       } else if (ret.payment_method === 'bank' && ret.bank_account_id) {
         const { data: bank } = await supabase.from('bank_accounts').select('balance').eq('id', ret.bank_account_id).single()
-        await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) + ret.total }).eq('id', ret.bank_account_id)
-        await supabase.from('bank_transactions').insert({ bank_account_id: ret.bank_account_id, type: 'deposit', amount: ret.total, reference: `Sale return voided: ${ret.return_no}`, notes: '' })
+        const { error: bankErr } = await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) + ret.total }).eq('id', ret.bank_account_id)
+        if (bankErr) throw bankErr
+        const { error: txErr } = await supabase.from('bank_transactions').insert({ bank_account_id: ret.bank_account_id, type: 'deposit', amount: ret.total, reference: `Sale return voided: ${ret.return_no}`, notes: '' })
+        if (txErr) throw txErr
       }
 
       await supabase.from('repair_sale_returns').update({

@@ -135,10 +135,16 @@ function SalePaymentModal({ shop, sale, onClose, onPaid }) {
       const { error } = await supabase.from('repair_sales').update({ amount_paid: newPaid }).eq('id', sale.id)
       if (error) throw error
 
-      await supabase.from('repair_sale_payments').insert({
+      // Must not proceed to the balance/cash effects below if this log entry
+      // failed to save — this is exactly what a future void relies on to
+      // reverse the payment precisely. A payment silently missing its own log
+      // row is the exact gap that caused a real voided sale's cash entry to
+      // never get reversed.
+      const { error: payLogError } = await supabase.from('repair_sale_payments').insert({
         sale_id: sale.id, amount: enteredAmount, payment_method: method,
         bank_account_id: (method === 'card' || method === 'bank') ? bankAccountId : null,
       })
+      if (payLogError) throw payLogError
 
       // Must not adjust the customer's balance if the sale itself failed to
       // update — same reasoning as everywhere else in this app: never let a
@@ -246,22 +252,29 @@ function VoidSaleModal({ shop, sale, onClose, onVoided }) {
       // net-zero (raised at creation, reduced at settlement) — only the
       // money paid out needs reversing. If still pending, the supplier
       // balance was raised at creation and never settled, so that needs
-      // reversing directly.
+      // reversing directly. Every step here is checked — a void that silently
+      // failed partway through but still finished and marked the sale voided
+      // would look successful while leaving money or balances unreversed,
+      // exactly the class of bug this whole void feature exists to prevent.
       for (const t of tpItems) {
         const amount = (t.cost_price || 0) * t.quantity
         if (t.payment_status === 'paid' && amount > 0.009) {
           if (t.payment_method === 'cash') {
-            await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'payment', amount, reference: sale.sale_no, notes: `Sale voided — 3rd-party item reversed: ${t.item_name}` })
+            const { error: cashErr } = await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'payment', amount, reference: sale.sale_no, notes: `Sale voided — 3rd-party item reversed: ${t.item_name}` })
+            if (cashErr) throw cashErr
           } else if (t.bank_transaction_id) {
             const { data: origTx } = await supabase.from('bank_transactions').select('bank_account_id').eq('id', t.bank_transaction_id).single()
             if (origTx?.bank_account_id) {
               const { data: bank } = await supabase.from('bank_accounts').select('balance').eq('id', origTx.bank_account_id).single()
-              await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) + amount }).eq('id', origTx.bank_account_id)
-              await supabase.from('bank_transactions').insert({ bank_account_id: origTx.bank_account_id, type: 'deposit', amount, reference: `Sale voided: ${sale.sale_no}`, notes: `3rd-party item reversed: ${t.item_name}` })
+              const { error: bankErr } = await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) + amount }).eq('id', origTx.bank_account_id)
+              if (bankErr) throw bankErr
+              const { error: txErr } = await supabase.from('bank_transactions').insert({ bank_account_id: origTx.bank_account_id, type: 'deposit', amount, reference: `Sale voided: ${sale.sale_no}`, notes: `3rd-party item reversed: ${t.item_name}` })
+              if (txErr) throw txErr
             }
           }
         } else if (t.supplier_id && amount > 0.009) {
-          await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: t.supplier_id, p_delta: -amount })
+          const { error: supErr } = await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: t.supplier_id, p_delta: -amount })
+          if (supErr) throw supErr
         }
       }
       await supabase.from('repair_third_party_items').delete().eq('sale_id', sale.id)
@@ -276,10 +289,13 @@ function VoidSaleModal({ shop, sale, onClose, onVoided }) {
       for (const p of payments) {
         if (p.bank_account_id) {
           const { data: bank } = await supabase.from('bank_accounts').select('balance').eq('id', p.bank_account_id).single()
-          await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) - p.amount }).eq('id', p.bank_account_id)
-          await supabase.from('bank_transactions').insert({ bank_account_id: p.bank_account_id, type: 'withdrawal', amount: p.amount, reference: `Sale voided: ${sale.sale_no}`, notes: `Payment reversed (${p.payment_method})` })
+          const { error: bankErr } = await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) - p.amount }).eq('id', p.bank_account_id)
+          if (bankErr) throw bankErr
+          const { error: txErr } = await supabase.from('bank_transactions').insert({ bank_account_id: p.bank_account_id, type: 'withdrawal', amount: p.amount, reference: `Sale voided: ${sale.sale_no}`, notes: `Payment reversed (${p.payment_method})` })
+          if (txErr) throw txErr
         } else {
-          await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'sale', amount: -p.amount, reference: sale.sale_no, notes: 'Sale voided — payment reversed' })
+          const { error: cashErr } = await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'sale', amount: -p.amount, reference: sale.sale_no, notes: 'Sale voided — payment reversed' })
+          if (cashErr) throw cashErr
         }
       }
       await supabase.from('repair_sale_payments').delete().eq('sale_id', sale.id)
@@ -451,11 +467,16 @@ function NewSaleModal({ shop, onClose, onCreated }) {
       if (error) throw error
 
       if (paid > 0) {
-        await supabase.from('repair_sale_payments').insert({
+        // Same reasoning as SalePaymentModal — a silently-failed log entry
+        // here is invisible until someone tries to void this sale later and
+        // finds nothing to reverse, exactly what happened to a real sale
+        // before this check existed.
+        const { error: payLogError } = await supabase.from('repair_sale_payments').insert({
           sale_id: sale.id, amount: paid, payment_method: paymentMethod,
           bank_account_id: null,
           notes: 'Paid at sale',
         })
+        if (payLogError) throw payLogError
       }
 
       for (const r of validRows) {

@@ -794,18 +794,24 @@ function VoidPurchaseModal({ shop, purchase, onClose, onVoided }) {
       // creation) — the same amount that was added when it was created.
       const debtAdded = (fresh.total || 0) - (fresh.initial_payment || 0)
       if (debtAdded > 0.009) {
-        await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: fresh.supplier_id, p_delta: -debtAdded })
+        const { error: balErr } = await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: fresh.supplier_id, p_delta: -debtAdded })
+        if (balErr) throw balErr
       }
 
-      // Refund whatever was paid at creation, via however it was originally paid.
+      // Refund whatever was paid at creation, via however it was originally
+      // paid. Checked so a failure here stops before the purchase gets
+      // marked voided below.
       const initialPayment = fresh.initial_payment || 0
       if (initialPayment > 0.009) {
         if (fresh.payment_method === 'cash') {
-          await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'refund', amount: initialPayment, reference: fresh.purchase_no, notes: 'Purchase voided' })
+          const { error: cashErr } = await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'refund', amount: initialPayment, reference: fresh.purchase_no, notes: 'Purchase voided' })
+          if (cashErr) throw cashErr
         } else if (fresh.payment_method === 'bank' && fresh.bank_account_id) {
           const { data: bank } = await supabase.from('bank_accounts').select('balance').eq('id', fresh.bank_account_id).single()
-          await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) + initialPayment }).eq('id', fresh.bank_account_id)
-          await supabase.from('bank_transactions').insert({ bank_account_id: fresh.bank_account_id, type: 'deposit', amount: initialPayment, reference: `Purchase voided: ${fresh.purchase_no}`, notes: '' })
+          const { error: bankErr } = await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) + initialPayment }).eq('id', fresh.bank_account_id)
+          if (bankErr) throw bankErr
+          const { error: txErr } = await supabase.from('bank_transactions').insert({ bank_account_id: fresh.bank_account_id, type: 'deposit', amount: initialPayment, reference: `Purchase voided: ${fresh.purchase_no}`, notes: '' })
+          if (txErr) throw txErr
         }
       }
 

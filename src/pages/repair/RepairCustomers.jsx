@@ -309,18 +309,26 @@ function ReceivePaymentModal({ shop, customer, jobs, sales, onClose, onPaid }) {
           // uses on the job's own page. That keeps this job's own balance
           // self-healing correctly AND keeps the customer ledger from
           // double-counting this against a separate standalone-payment line.
-          await supabase.from('repair_job_payments').insert({
+          // If this log insert fails, the job's own balance_due recalculation
+          // (which sums this table) would later overwrite the correct
+          // reduction below with a wrong, too-high figure — so this must not
+          // proceed silently.
+          const { error: jobPayError } = await supabase.from('repair_job_payments').insert({
             job_id: item.id, amount: take, payment_method: method,
             bank_account_id: (method === 'card' || method === 'bank') ? bankAccountId : null,
           })
+          if (jobPayError) throw jobPayError
           await supabase.from('repair_jobs').update({ balance_due: Math.max(0, item.due - take) }).eq('id', item.id)
         } else {
           const newPaid = (item.amount_paid || 0) + take
           await supabase.from('repair_sales').update({ amount_paid: newPaid }).eq('id', item.id)
-          await supabase.from('repair_sale_payments').insert({
+          // Same reasoning — a silently-missing log row here is invisible
+          // until a future void finds nothing to reverse.
+          const { error: salePayError } = await supabase.from('repair_sale_payments').insert({
             sale_id: item.id, amount: take, payment_method: method,
             bank_account_id: (method === 'card' || method === 'bank') ? bankAccountId : null,
           })
+          if (salePayError) throw salePayError
         }
         applied.push({ ...item, applied: take })
         remaining -= take
