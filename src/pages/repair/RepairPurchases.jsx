@@ -131,12 +131,11 @@ function SupplierList({ shop, suppliers, onChanged }) {
     let supplierRow = fresh || s
     if (fresh) setSelected(fresh)
 
-    const [{ data: purchases }, { data: thirdPartyItems }, { data: returns }, { data: standaloneForCalc }, { data: settlementsForCalc }] = await Promise.all([
+    const [{ data: purchases }, { data: thirdPartyItems }, { data: returns }, { data: standaloneForCalc }] = await Promise.all([
       supabase.from('repair_purchases').select('total, initial_payment').eq('supplier_id', supplierRow.id),
       supabase.from('repair_third_party_items').select('cost_price, quantity').eq('supplier_id', supplierRow.id).eq('payment_status', 'pending'),
       supabase.from('repair_purchase_returns').select('total').eq('supplier_id', supplierRow.id).neq('status', 'voided'),
       supabase.from('repair_supplier_standalone_payments').select('amount').eq('supplier_id', supplierRow.id),
-      supabase.from('repair_settlements').select('amount').eq('supplier_id', supplierRow.id),
     ])
     // Same self-healing recalc as customers — keeps outstanding_balance
     // resilient to any gap in the incremental adjust-RPC calls (like the one
@@ -150,16 +149,25 @@ function SupplierList({ shop, suppliers, onChanged }) {
     // full standalone-payment totals would double-count the allocated
     // portion (or miss it entirely for the unallocated excess) — using the
     // same frozen/full-amount pairing as the ledger avoids both. Combined
-    // Accounts settlements need the same treatment as standalone payments.
+    // Accounts settlements route through a real repair_supplier_standalone_
+    // payments row (see RepairCombinedAccounts.jsx), so standaloneForCalc
+    // above already picks them up — no separate settlements term needed, and
+    // adding one back would double-count every settlement.
     const trueBalance = (supplierRow.opening_balance || 0)
       + (purchases || []).reduce((s, p) => s + Math.max(0, (p.total || 0) - (p.initial_payment || 0)), 0)
       + (thirdPartyItems || []).reduce((s, t) => s + (t.cost_price || 0) * (t.quantity || 1), 0)
       - (returns || []).reduce((s, r) => s + (r.total || 0), 0)
       - (standaloneForCalc || []).reduce((s, p) => s + (p.amount || 0), 0)
-      - (settlementsForCalc || []).reduce((s, r) => s + (r.amount || 0), 0)
     if (trueBalance !== supplierRow.outstanding_balance) {
-      const { data: updated } = await supabase.from('repair_suppliers').update({ outstanding_balance: trueBalance }).eq('id', supplierRow.id).select().single()
-      if (updated) { supplierRow = updated; setSelected(updated); setSuppliers(ss => ss.map(sp => sp.id === updated.id ? updated : sp)) }
+      const { data: updated, error: healErr } = await supabase.from('repair_suppliers').update({ outstanding_balance: trueBalance }).eq('id', supplierRow.id).select().single()
+      if (healErr) {
+        // Don't leave this silent — the modal would otherwise show the
+        // freshly-computed (correct) number while the list keeps showing
+        // the stale stored one, with nothing to explain the mismatch.
+        toast.error('Balance recalculated but failed to save: ' + healErr.message)
+      } else if (updated) {
+        supplierRow = updated; setSelected(updated); setSuppliers(ss => ss.map(sp => sp.id === updated.id ? updated : sp))
+      }
     }
 
     await loadStatement(supplierRow)
@@ -167,12 +175,11 @@ function SupplierList({ shop, suppliers, onChanged }) {
 
   async function loadStatement(supplier) {
     const supplierId = supplier.id
-    const [{ data: purchases }, { data: payments }, { data: thirdPartyItems }, { data: returns }, { data: settlements }] = await Promise.all([
+    const [{ data: purchases }, { data: payments }, { data: thirdPartyItems }, { data: returns }] = await Promise.all([
       supabase.from('repair_purchases').select('*').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
       supabase.from('repair_supplier_standalone_payments').select('*, bank_accounts(name)').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
       supabase.from('repair_third_party_items').select('*, repair_jobs(job_no), repair_sales(sale_no)').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
       supabase.from('repair_purchase_returns').select('*').eq('supplier_id', supplierId).neq('status', 'voided').order('created_at', { ascending: true }),
-      supabase.from('repair_settlements').select('*, repair_customers(name)').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
     ])
     const events = []
     if (supplier.opening_balance > 0) {
@@ -189,11 +196,6 @@ function SupplierList({ shop, suppliers, onChanged }) {
     ;(returns || []).forEach(r => events.push({
       date: r.created_at, type: 'return', label: `Return ${r.return_no}`,
       debit: 0, credit: r.total, ref: r.return_no,
-    }))
-    ;(settlements || []).forEach(st => events.push({
-      date: st.created_at, type: 'settlement',
-      label: `Settlement — offset against ${st.repair_customers?.name || 'customer'} account`,
-      debit: 0, credit: st.amount, ref: '',
     }))
     ;(thirdPartyItems || []).forEach(t => {
       const lineTotal = (t.cost_price || 0) * (t.quantity || 1)

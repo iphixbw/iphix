@@ -576,6 +576,12 @@ function VoidJobModal({ job, jobParts, thirdPartyItems, jobPayments, onClose, on
 
   const paidTotal = jobPayments.reduce((s, p) => s + p.amount, 0)
   const settledThirdParty = thirdPartyItems.filter(t => t.payment_status === 'paid')
+  // A settlement payment (from Combined Accounts) isn't real cash/bank
+  // movement — it's a balance offset against a linked supplier. The normal
+  // payment reversal below assumes every payment is real cash/bank, so
+  // reversing a settlement that way would create a phantom cash entry.
+  // Safer to block and require it be undone manually first.
+  const hasSettlementPayment = jobPayments.some(p => p.payment_method === 'settlement')
 
   async function handleVoid() {
     setSaving(true)
@@ -673,6 +679,15 @@ function VoidJobModal({ job, jobParts, thirdPartyItems, jobPayments, onClose, on
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: '20px' }}>
       <div style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '100%', maxWidth: '440px' }}>
         <h3 style={{ fontSize: '16px', fontWeight: '800', margin: '0 0 4px', color: '#e11d48' }}>Void Job {job.job_no}?</h3>
+        {hasSettlementPayment ? (
+          <>
+            <p style={{ fontSize: '13px', color: '#44403c', margin: '0 0 16px' }}>
+              Can't void — this job was partly or fully paid via a Combined Accounts settlement, which offsets a linked supplier's balance rather than moving real cash. Reversing that safely needs to be done manually (settle back the other direction in Combined Accounts first), not automatically.
+            </p>
+            <button onClick={onClose} style={{ width: '100%', padding: '10px', background: '#f5f1ea', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '700' }}>Close</button>
+          </>
+        ) : (
+          <>
         <p style={{ fontSize: '12px', color: '#8a7a63', margin: '0 0 14px' }}>This cannot be undone. The following will be reversed:</p>
         <ul style={{ fontSize: '13px', color: '#44403c', margin: '0 0 16px', paddingLeft: '18px', lineHeight: '1.7' }}>
           <li>{jobParts.length} repair part{jobParts.length !== 1 ? 's' : ''} — stock and cost restored</li>
@@ -685,6 +700,8 @@ function VoidJobModal({ job, jobParts, thirdPartyItems, jobPayments, onClose, on
           <button onClick={onClose} style={{ flex: 1, padding: '10px', background: '#f5f1ea', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '700' }}>Cancel</button>
           <button onClick={handleVoid} disabled={saving} style={{ flex: 1, padding: '10px', background: '#e11d48', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '800' }}>{saving ? 'Voiding...' : 'Void Job'}</button>
         </div>
+          </>
+        )}
       </div>
     </div>
   )

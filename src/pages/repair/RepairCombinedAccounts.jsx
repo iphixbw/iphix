@@ -242,14 +242,84 @@ function SettleModal({ link, onClose, onSettled }) {
     if (amt > maxSettleable + 0.009) return toast.error(`Can't settle more than ${formatLKR(maxSettleable)} — that's the smaller of the two balances`)
     setSaving(true)
     try {
-      // Both balances move by the same amount, in their own direction — this
-      // is what makes it a genuine offset rather than two independent
-      // transactions, and what the ledger reversal (if ever voided/undone
-      // manually) would need to mirror exactly.
+      // ============ Customer side ============
+      // Applied exactly like a standalone customer payment (ReceivePaymentModal):
+      // FIFO across oldest unpaid jobs/sales first, so those individual records
+      // actually show as paid down — not just the customer's aggregate balance.
+      const [{ data: jobs }, { data: sales }] = await Promise.all([
+        supabase.from('repair_jobs').select('*').eq('customer_id', link.customer_id).neq('status', 'voided'),
+        supabase.from('repair_sales').select('*').eq('customer_id', link.customer_id).neq('status', 'voided'),
+      ])
+      const outstandingItems = [
+        ...(jobs || []).filter(j => (j.balance_due || 0) > 0).map(j => ({ kind: 'job', id: j.id, date: j.created_at, due: j.balance_due })),
+        ...(sales || []).filter(s => (s.total - s.amount_paid) > 0).map(s => ({ kind: 'sale', id: s.id, date: s.created_at, due: s.total - s.amount_paid, amount_paid: s.amount_paid })),
+      ].sort((a, b) => new Date(a.date) - new Date(b.date))
+
+      let remaining = amt
+      for (const item of outstandingItems) {
+        if (remaining <= 0) break
+        const take = Math.min(remaining, item.due)
+        if (item.kind === 'job') {
+          const { error: jobPayError } = await supabase.from('repair_job_payments').insert({ job_id: item.id, amount: take, payment_method: 'settlement' })
+          if (jobPayError) throw jobPayError
+          const { error: jobUpdError } = await supabase.from('repair_jobs').update({ balance_due: Math.max(0, item.due - take) }).eq('id', item.id)
+          if (jobUpdError) throw jobUpdError
+        } else {
+          const { error: saleUpdError } = await supabase.from('repair_sales').update({ amount_paid: item.amount_paid + take }).eq('id', item.id)
+          if (saleUpdError) throw saleUpdError
+          const { error: salePayError } = await supabase.from('repair_sale_payments').insert({ sale_id: item.id, amount: take, payment_method: 'settlement' })
+          if (salePayError) throw salePayError
+        }
+        remaining -= take
+      }
+      // Whatever's left (e.g. settling against an opening balance with no
+      // job/sale of its own) goes here — same convention as any other
+      // standalone payment, and what makes the customer self-heal formula
+      // correctly account for it without a separate settlements term.
+      if (remaining > 0.009) {
+        const { error: standaloneError } = await supabase.from('repair_customer_standalone_payments').insert({
+          customer_id: link.customer_id, amount: remaining, payment_method: 'settlement',
+          notes: `Combined Accounts settlement vs ${link.repair_suppliers?.name || 'supplier'}`,
+        })
+        if (standaloneError) throw standaloneError
+      }
       const { error: custErr } = await supabase.rpc('repair_adjust_customer_balance', { p_customer_id: link.customer_id, p_delta: -amt })
       if (custErr) throw custErr
+
+      // ============ Supplier side ============
+      // Applied exactly like a standalone supplier payment (SupplierPaymentModal):
+      // a real payment record, FIFO-allocated across oldest unpaid purchases,
+      // so those individual purchases actually update too — not just the
+      // supplier's aggregate balance.
+      const { data: payment, error: payErr } = await supabase.from('repair_supplier_standalone_payments').insert({
+        supplier_id: link.supplier_id, amount: amt, payment_method: 'settlement',
+        reference: `Settlement vs ${link.repair_customers?.name || 'customer'}`,
+      }).select().single()
+      if (payErr) throw payErr
+
+      const { data: purchases } = await supabase.from('repair_purchases').select('*').eq('supplier_id', link.supplier_id).neq('status', 'voided').order('created_at', { ascending: true })
+      let supRemaining = amt
+      for (const p of (purchases || [])) {
+        if (supRemaining <= 0) break
+        const due = Math.max(0, (p.total || 0) - (p.amount_paid || 0))
+        if (due <= 0.009) continue
+        const settle = Math.min(due, supRemaining)
+        const { error: updErr } = await supabase.from('repair_purchases').update({
+          amount_paid: (p.amount_paid || 0) + settle,
+          credit_amount: Math.max(0, (p.total || 0) - ((p.amount_paid || 0) + settle)),
+        }).eq('id', p.id)
+        if (updErr) throw updErr
+        const { error: allocErr } = await supabase.from('repair_supplier_payment_allocations').insert({ payment_id: payment.id, purchase_id: p.id, amount: settle })
+        if (allocErr) throw allocErr
+        supRemaining -= settle
+      }
       const { error: supErr } = await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: link.supplier_id, p_delta: -amt })
       if (supErr) throw supErr
+
+      // Combined Accounts' own history record — purely for the "History"
+      // view on this linked pair; the actual balance/ledger effect above is
+      // already fully accounted for via the real payment records created
+      // above, so this is never read by any balance calculation.
       const { error: recErr } = await supabase.from('repair_settlements').insert({
         link_id: link.id, customer_id: link.customer_id, supplier_id: link.supplier_id,
         amount: amt, notes: notes || null,

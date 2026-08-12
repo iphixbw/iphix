@@ -209,6 +209,7 @@ function VoidSaleModal({ shop, sale, onClose, onVoided }) {
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
   const [blockingReturns, setBlockingReturns] = useState(null)
+  const [blockedBySettlement, setBlockedBySettlement] = useState(false)
   const [preview, setPreview] = useState(null)
 
   useEffect(() => {
@@ -220,6 +221,12 @@ function VoidSaleModal({ shop, sale, onClose, onVoided }) {
         supabase.from('repair_third_party_items').select('*').eq('sale_id', sale.id),
         supabase.from('repair_sale_payments').select('*').eq('sale_id', sale.id),
       ])
+      // A settlement payment (from Combined Accounts) isn't real cash/bank
+      // movement — it's a balance offset against a linked supplier. The
+      // normal payment reversal below assumes every payment is real
+      // cash/bank, so reversing a settlement that way would create a phantom
+      // cash entry. Safer to block and require it be undone manually first.
+      if ((payments || []).some(p => p.payment_method === 'settlement')) { setBlockedBySettlement(true); return }
       setPreview({ items: items || [], tpItems: tpItems || [], payments: payments || [] })
     }
     load()
@@ -329,6 +336,13 @@ function VoidSaleModal({ shop, sale, onClose, onVoided }) {
           <>
             <p style={{ fontSize: '13px', color: '#44403c', margin: '0 0 16px' }}>
               Can't void — {blockingReturns.length} active return{blockingReturns.length !== 1 ? 's' : ''} ({blockingReturns.map(r => r.return_no).join(', ')}) reference this sale. Void {blockingReturns.length !== 1 ? 'those' : 'that'} first.
+            </p>
+            <button onClick={onClose} style={{ width: '100%', padding: '10px', background: '#f5f1ea', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '700' }}>Close</button>
+          </>
+        ) : blockedBySettlement ? (
+          <>
+            <p style={{ fontSize: '13px', color: '#44403c', margin: '0 0 16px' }}>
+              Can't void — this sale was partly or fully paid via a Combined Accounts settlement, which offsets a linked supplier's balance rather than moving real cash. Reversing that safely needs to be done manually (settle back the other direction in Combined Accounts first), not automatically.
             </p>
             <button onClick={onClose} style={{ width: '100%', padding: '10px', background: '#f5f1ea', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '700' }}>Close</button>
           </>
