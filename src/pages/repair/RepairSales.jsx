@@ -370,10 +370,14 @@ function NewSaleModal({ shop, onClose, onCreated }) {
   const [rows, setRows] = useState([{ part_id: '', quantity: '1', unit_price: '', is_third_party: false, item_name: '', supplier_id: '', supplier_other: '', cost_price: '' }])
   const [paymentMethod, setPaymentMethod] = useState('cash')
   const [amountPaid, setAmountPaid] = useState('')
+  const [transportFee, setTransportFee] = useState('')
+  const [bankAccountId, setBankAccountId] = useState('')
+  const [bankAccounts, setBankAccounts] = useState([])
   const [saving, setSaving] = useState(false)
 
   useEffect(() => { supabase.from('repair_suppliers').select('id, name').order('name').then(({ data }) => setSuppliers(data || [])) }, [])
   useEffect(() => { fetchOldestBatchCosts().then(setPartCosts) }, [])
+  useEffect(() => { supabase.from('bank_accounts').select('*').order('name').then(({ data }) => setBankAccounts(data || [])) }, [])
 
   useEffect(() => {
     // A plain .select() caps at Supabase's default 1000-row limit — with a large
@@ -404,7 +408,8 @@ function NewSaleModal({ shop, onClose, onCreated }) {
     return () => clearTimeout(t)
   }, [customerSearch])
 
-  const total = rows.reduce((s, r) => s + (parseFloat(r.quantity) || 0) * (parseFloat(r.unit_price) || 0), 0)
+  const itemsSubtotal = rows.reduce((s, r) => s + (parseFloat(r.quantity) || 0) * (parseFloat(r.unit_price) || 0), 0)
+  const total = itemsSubtotal + (parseFloat(transportFee) || 0)
   const paid = paymentMethod === 'credit' ? (parseFloat(amountPaid) || 0) : total
   const balanceDue = Math.max(0, total - paid)
 
@@ -455,6 +460,7 @@ function NewSaleModal({ shop, onClose, onCreated }) {
     }
     if (validRows.some(r => !(parseFloat(r.unit_price) > 0))) return toast.error('Enter a selling price for every item')
     if (paymentMethod === 'credit' && !selectedCustomer) return toast.error('Select a customer for a credit sale')
+    if ((paymentMethod === 'card' || paymentMethod === 'bank_transfer') && !bankAccountId) return toast.error('Select a bank account')
     setSaving(true)
     try {
       const sale_no = await generateRepairSaleNo()
@@ -462,7 +468,8 @@ function NewSaleModal({ shop, onClose, onCreated }) {
         sale_no, shop_id: shop?.id || null,
         customer_id: selectedCustomer?.id || null,
         customer_name: selectedCustomer?.name || customerName || 'Walk-in',
-        subtotal: total, total, payment_method: paymentMethod, amount_paid: paid, status: 'confirmed',
+        subtotal: itemsSubtotal, transport_fee: parseFloat(transportFee) || 0, total,
+        payment_method: paymentMethod, amount_paid: paid, status: 'confirmed',
       }).select().single()
       if (error) throw error
 
@@ -473,7 +480,7 @@ function NewSaleModal({ shop, onClose, onCreated }) {
         // before this check existed.
         const { error: payLogError } = await supabase.from('repair_sale_payments').insert({
           sale_id: sale.id, amount: paid, payment_method: paymentMethod,
-          bank_account_id: null,
+          bank_account_id: (paymentMethod === 'card' || paymentMethod === 'bank_transfer') ? bankAccountId : null,
           notes: 'Paid at sale',
         })
         if (payLogError) throw payLogError
@@ -509,9 +516,18 @@ function NewSaleModal({ shop, onClose, onCreated }) {
         }
       }
 
-      // Cash ledger only reflects actual cash received today, not credit or non-cash methods
+      // Cash ledger reflects actual cash received; card/bank transfer route
+      // through a real bank account instead — this used to only handle cash,
+      // silently recording no financial movement at all for the other two
+      // methods even though the sale itself showed as paid.
       if (paymentMethod === 'cash' && paid > 0) {
         await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'sale', amount: paid, reference: sale_no, notes: 'Parts sale' })
+      } else if ((paymentMethod === 'card' || paymentMethod === 'bank_transfer') && paid > 0) {
+        const bank = bankAccounts.find(b => b.id === bankAccountId)
+        const { error: bankErr } = await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) + paid }).eq('id', bankAccountId)
+        if (bankErr) throw bankErr
+        const { error: txErr } = await supabase.from('bank_transactions').insert({ bank_account_id: bankAccountId, type: 'deposit', amount: paid, reference: `Parts sale: ${sale_no}`, notes: `${paymentMethod} payment` })
+        if (txErr) throw txErr
       }
       // Credit sale — add the unpaid balance to the customer's outstanding balance
       if (paymentMethod === 'credit' && balanceDue > 0) {
@@ -636,6 +652,11 @@ function NewSaleModal({ shop, onClose, onCreated }) {
         ))}
         <button onClick={addRow} style={{ marginBottom: '16px', padding: '6px 14px', background: '#fef3e2', color: '#d4881f', border: 'none', borderRadius: '7px', cursor: 'pointer', fontSize: '12px', fontWeight: '700' }}>+ Add Row</button>
 
+        <div style={{ marginBottom: '16px' }}>
+          <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Transport Fee (optional)</label>
+          <input type="number" style={inp} placeholder="0" value={transportFee} onChange={e => setTransportFee(e.target.value)} />
+        </div>
+
         <div style={{ display: 'grid', gridTemplateColumns: paymentMethod === 'credit' ? '1fr 1fr' : '1fr', gap: '10px', marginBottom: '16px' }}>
           <div>
             <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Payment Method</label>
@@ -651,7 +672,22 @@ function NewSaleModal({ shop, onClose, onCreated }) {
           )}
         </div>
 
+        {(paymentMethod === 'card' || paymentMethod === 'bank_transfer') && (
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Bank Account</label>
+            <select style={inp} value={bankAccountId} onChange={e => setBankAccountId(e.target.value)}>
+              <option value="">Select...</option>
+              {bankAccounts.map(b => <option key={b.id} value={b.id}>{b.name}{b.bank_name ? ` — ${b.bank_name}` : ''}</option>)}
+            </select>
+          </div>
+        )}
+
         <div style={{ background: '#fdf8f3', borderRadius: '10px', padding: '14px', marginBottom: '18px' }}>
+          {parseFloat(transportFee) > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#78716c', marginBottom: '4px' }}>
+              <span>Items + Transport Fee</span><span>{formatLKR(itemsSubtotal)} + {formatLKR(parseFloat(transportFee) || 0)}</span>
+            </div>
+          )}
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', fontWeight: '700', color: '#1c1917', marginBottom: paymentMethod === 'credit' ? '4px' : 0 }}>
             <span>Total</span><span>{formatLKR(total)}</span>
           </div>

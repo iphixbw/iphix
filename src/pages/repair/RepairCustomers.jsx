@@ -35,6 +35,7 @@ export default function RepairCustomers({ shop, onOpenJob }) {
 
     const { data: creditReturns } = await supabase.from('repair_sale_returns').select('total').eq('customer_id', c.id).eq('payment_method', 'credit').neq('status', 'voided')
     const { data: standaloneForCalc } = await supabase.from('repair_customer_standalone_payments').select('amount').eq('customer_id', c.id)
+    const { data: settlementsForCalc } = await supabase.from('repair_settlements').select('amount').eq('customer_id', c.id)
 
     // outstanding_balance is normally kept in sync incrementally (payments,
     // credit sales), but that only works if EVERY code path that changes what
@@ -50,11 +51,15 @@ export default function RepairCustomers({ shop, onOpenJob }) {
     // opening_balance is a static field with nothing else to net a standalone
     // (unallocated) payment against, so leaving this out is exactly what
     // caused the header to silently ignore every standalone payment ever made.
+    // Combined Accounts settlements are the same shape as a standalone
+    // payment — money that reduced the balance without any job/sale of its
+    // own to attach to — so they need the exact same treatment.
     const trueBalance = (c.opening_balance || 0)
       + (j || []).filter(job => job.status !== 'voided').reduce((s, job) => s + (job.balance_due || 0), 0)
       + (s || []).reduce((sum, sale) => sum + Math.max(0, (sale.total || 0) - (sale.amount_paid || 0)), 0)
       - (creditReturns || []).reduce((s, r) => s + (r.total || 0), 0)
       - (standaloneForCalc || []).reduce((s, p) => s + (p.amount || 0), 0)
+      - (settlementsForCalc || []).reduce((s, r) => s + (r.amount || 0), 0)
     let fresh = c
     if (trueBalance !== c.outstanding_balance) {
       const { data: updated } = await supabase.from('repair_customers').update({ outstanding_balance: trueBalance }).eq('id', c.id).select().single()
@@ -62,7 +67,7 @@ export default function RepairCustomers({ shop, onOpenJob }) {
     }
 
     const jobIds = (j || []).map(job => job.id)
-    const [{ data: jobPayments }, { data: standalone }, { data: saleReturns }] = await Promise.all([
+    const [{ data: jobPayments }, { data: standalone }, { data: saleReturns }, { data: settlements }] = await Promise.all([
       jobIds.length ? supabase.from('repair_job_payments').select('*').in('job_id', jobIds) : Promise.resolve({ data: [] }),
       supabase.from('repair_customer_standalone_payments').select('*, bank_accounts(name)').eq('customer_id', c.id),
       // Only credit-method returns show here — cash/bank refunds don't touch
@@ -70,6 +75,7 @@ export default function RepairCustomers({ shop, onOpenJob }) {
       // total diverge from what's actually stored, recreating the exact bug
       // this self-heal exists to prevent.
       supabase.from('repair_sale_returns').select('*').eq('customer_id', c.id).eq('payment_method', 'credit').neq('status', 'voided'),
+      supabase.from('repair_settlements').select('*, repair_suppliers(name)').eq('customer_id', c.id),
     ])
 
     // Build a chronological activity statement across jobs + sales + their payments
@@ -100,6 +106,9 @@ export default function RepairCustomers({ shop, onOpenJob }) {
     })
     ;(saleReturns || []).forEach(r => {
       events.push({ date: r.created_at, label: `Return ${r.return_no}`, debit: 0, credit: r.total, type: 'return' })
+    })
+    ;(settlements || []).forEach(st => {
+      events.push({ date: st.created_at, label: `Settlement — offset against ${st.repair_suppliers?.name || 'supplier'} account`, debit: 0, credit: st.amount, type: 'settlement' })
     })
     events.sort((a, b) => new Date(a.date) - new Date(b.date))
     let running = 0

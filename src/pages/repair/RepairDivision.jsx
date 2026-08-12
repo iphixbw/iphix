@@ -12,6 +12,8 @@ import RepairSales from './RepairSales'
 import RepairExpenses from './RepairExpenses'
 import RepairCash from './RepairCash'
 import RepairCustomers from './RepairCustomers'
+import RepairCombinedAccounts from './RepairCombinedAccounts'
+import RepairLending from './RepairLending'
 import RepairThirdParty from './RepairThirdParty'
 import RepairReports from './RepairReports'
 import RepairAnalytics from './RepairAnalytics'
@@ -26,6 +28,8 @@ const MENU = [
   { id: 'purchases', icon: '🧾', label: 'Purchases' },
   { id: 'sales', icon: '🛒', label: 'Parts Sales' },
   { id: 'customers', icon: '👥', label: 'Customers' },
+  { id: 'combined_accounts', icon: '⇄', label: 'Combined Accounts' },
+  { id: 'lending', icon: '🤝', label: 'Personal Lending' },
   { id: 'third_party', icon: '🔗', label: '3rd Party Items' },
   { id: 'expenses', icon: '📝', label: 'Expenses' },
   { id: 'cash', icon: '💰', label: 'Cash & Deposits' },
@@ -40,6 +44,7 @@ export default function RepairDivision({ session, activeShop, isSuperAdmin, onEx
   const [activePage, setActivePage] = useState(() => localStorage.getItem('iphix_repair_active_page') || 'dashboard')
   const [selectedJobId, setSelectedJobId] = useState(null)
   const [loggingOut, setLoggingOut] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
 
   useEffect(() => {
     localStorage.setItem('iphix_repair_active_page', activePage)
@@ -48,6 +53,7 @@ export default function RepairDivision({ session, activeShop, isSuperAdmin, onEx
   function navigateTo(page) {
     setActivePage(page)
     if (page !== 'job_detail') setSelectedJobId(null)
+    setSidebarOpen(false)
   }
 
   function openJob(jobId) {
@@ -70,6 +76,8 @@ export default function RepairDivision({ session, activeShop, isSuperAdmin, onEx
       case 'purchases': return <RepairPurchases shop={activeShop} />
       case 'sales': return <RepairSales shop={activeShop} />
       case 'customers': return <RepairCustomers shop={activeShop} onOpenJob={openJob} />
+      case 'combined_accounts': return <RepairCombinedAccounts shop={activeShop} />
+      case 'lending': return <RepairLending shop={activeShop} />
       case 'third_party': return <RepairThirdParty shop={activeShop} />
       case 'expenses': return <RepairExpenses shop={activeShop} />
       case 'cash': return <RepairCash shop={activeShop} />
@@ -86,8 +94,24 @@ export default function RepairDivision({ session, activeShop, isSuperAdmin, onEx
     <div style={{ display: 'flex', minHeight: '100vh', background: '#fdf8f3', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
       <Toaster position="top-right" />
 
+      {/* Mobile/tablet top bar — hidden on desktop via CSS */}
+      <div className="iphix-mobile-topbar" style={{ display: 'none', position: 'fixed', top: 0, left: 0, right: 0, height: '58px', background: '#1c1917', alignItems: 'center', gap: '12px', padding: '0 14px', zIndex: 200, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+        <button onClick={() => setSidebarOpen(v => !v)} aria-label="Toggle menu"
+          style={{ background: 'rgba(255,255,255,0.08)', border: 'none', borderRadius: '8px', width: '38px', height: '38px', color: '#f0b23d', fontSize: '18px', cursor: 'pointer', flexShrink: 0 }}>
+          ☰
+        </button>
+        <Logo size={28} />
+        <div style={{ color: 'white', fontWeight: '700', fontSize: '14px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>iPHIX Technologies</div>
+      </div>
+
+      {/* Overlay — closes the drawer when tapped, mobile/tablet only */}
+      {sidebarOpen && (
+        <div className="iphix-sidebar-overlay" onClick={() => setSidebarOpen(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 150 }} />
+      )}
+
       {/* Sidebar — warm amber/charcoal identity, distinct from retail's navy/blue */}
-      <div style={{ width: '244px', minHeight: '100vh', background: 'linear-gradient(180deg, #1c1917 0%, #2a1f14 100%)', display: 'flex', flexDirection: 'column', position: 'fixed', left: 0, top: 0, bottom: 0, zIndex: 100 }}>
+      <div className={`iphix-sidebar${sidebarOpen ? ' open' : ''}`} style={{ width: '244px', minHeight: '100vh', background: 'linear-gradient(180deg, #1c1917 0%, #2a1f14 100%)', display: 'flex', flexDirection: 'column', position: 'fixed', left: 0, top: 0, bottom: 0, zIndex: 180 }}>
         <div style={{ padding: '22px 18px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '11px' }}>
             <Logo size={36} />
@@ -103,10 +127,10 @@ export default function RepairDivision({ session, activeShop, isSuperAdmin, onEx
             const isActive = activePage === item.id || (item.id === 'jobs' && activePage === 'job_detail')
             return (
               <button key={item.id} onClick={() => navigateTo(item.id)}
-                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', borderRadius: '9px', border: 'none', cursor: 'pointer', marginBottom: '2px', background: isActive ? 'linear-gradient(135deg, #f0b23d, #d4881f)' : 'transparent', color: isActive ? '#1c1917' : '#d6c7b3', fontSize: '13px', fontWeight: isActive ? '700' : '400', textAlign: 'left', boxShadow: isActive ? '0 4px 12px rgba(240,178,61,0.3)' : 'none', transition: 'background 0.12s, color 0.12s' }}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '11px 12px', borderRadius: '9px', border: 'none', cursor: 'pointer', marginBottom: '2px', background: isActive ? 'linear-gradient(135deg, #f0b23d, #d4881f)' : 'transparent', color: isActive ? '#1c1917' : '#d6c7b3', fontSize: '14px', fontWeight: isActive ? '700' : '400', textAlign: 'left', boxShadow: isActive ? '0 4px 12px rgba(240,178,61,0.3)' : 'none', transition: 'background 0.12s, color 0.12s' }}
                 onMouseEnter={e => { if (!isActive) { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = 'white' } }}
                 onMouseLeave={e => { if (!isActive) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#d6c7b3' } }}>
-                <span style={{ fontSize: '15px' }}>{item.icon}</span>
+                <span style={{ fontSize: '16px' }}>{item.icon}</span>
                 {item.label}
               </button>
             )
@@ -115,7 +139,7 @@ export default function RepairDivision({ session, activeShop, isSuperAdmin, onEx
 
         <div style={{ padding: '16px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
           <button onClick={onExit}
-            style={{ width: '100%', padding: '9px', background: 'rgba(255,255,255,0.06)', color: '#d6c7b3', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '9px', cursor: 'pointer', fontSize: '13px', fontWeight: '600', marginBottom: '10px' }}>
+            style={{ width: '100%', padding: '11px', background: 'rgba(255,255,255,0.06)', color: '#d6c7b3', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '9px', cursor: 'pointer', fontSize: '13px', fontWeight: '600', marginBottom: '10px' }}>
             ← Back to Retail System
           </button>
 
@@ -129,16 +153,37 @@ export default function RepairDivision({ session, activeShop, isSuperAdmin, onEx
             </div>
           </div>
           <button onClick={handleLogout} disabled={loggingOut}
-            style={{ width: '100%', padding: '9px', background: 'rgba(239,68,68,0.14)', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '9px', cursor: 'pointer', fontSize: '13px', fontWeight: '500' }}>
+            style={{ width: '100%', padding: '11px', background: 'rgba(239,68,68,0.14)', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '9px', cursor: 'pointer', fontSize: '13px', fontWeight: '500' }}>
             {loggingOut ? 'Signing out...' : '⏻ Sign Out'}
           </button>
         </div>
       </div>
 
       {/* Main content */}
-      <div style={{ marginLeft: '244px', flex: 1, padding: '32px' }}>
+      <div className="iphix-main-content" style={{ marginLeft: '244px', flex: 1, padding: '32px', width: '100%', boxSizing: 'border-box' }}>
         {renderPage()}
       </div>
+
+      <style>{`
+        @media (max-width: 900px) {
+          .iphix-mobile-topbar { display: flex !important; }
+          .iphix-sidebar {
+            transform: translateX(-100%);
+            transition: transform 0.25s ease;
+            box-shadow: 4px 0 24px rgba(0,0,0,0.3);
+          }
+          .iphix-sidebar.open { transform: translateX(0); }
+          .iphix-main-content {
+            margin-left: 0 !important;
+            padding: 16px !important;
+            padding-top: 74px !important;
+            max-width: 100vw;
+          }
+        }
+        @media (min-width: 901px) {
+          .iphix-sidebar-overlay { display: none !important; }
+        }
+      `}</style>
     </div>
   )
 }

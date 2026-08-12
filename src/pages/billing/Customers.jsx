@@ -38,6 +38,7 @@ export default function Customers({ activeShop, isSuperAdmin }) {
   const [viewReturnItems, setViewReturnItems] = useState([])
   const [linkingReturnId, setLinkingReturnId] = useState(null) // return being linked to an invoice
   const [customerReturns, setCustomerReturns] = useState([])
+  const [customerSettlements, setCustomerSettlements] = useState([])
   const [cardBankAccountId, setCardBankAccountId] = useState('')
   const [showPayModal, setShowPayModal] = useState(false)
   const [payAmount, setPayAmount] = useState('')
@@ -59,7 +60,7 @@ export default function Customers({ activeShop, isSuperAdmin }) {
   // an understated amount on the list.
   useEffect(() => {
     if (!selectedCustomer || invoicesLoading) return
-    const _bal = computeCustomerBalance(selectedCustomer, customerInvoices, customerReturns, customerBankTx)
+    const _bal = computeCustomerBalance(selectedCustomer, customerInvoices, customerReturns, customerBankTx, customerSettlements)
     syncCustomerBalance(selectedCustomer.id, _bal)
   }, [selectedCustomer?.id, invoicesLoading, customerInvoices, customerBankTx, customerReturns])
 
@@ -97,7 +98,7 @@ export default function Customers({ activeShop, isSuperAdmin }) {
   // a credit, which is the only model that's correct for cash invoices that
   // later receive cheque payments (credit_amount stays 0 on those, so the old
   // credit-only formula never counted them as debt in the first place).
-  function computeCustomerBalance(customer, invoices, returns, bankTx) {
+  function computeCustomerBalance(customer, invoices, returns, bankTx, settlements = []) {
     const openingBalance = customer?.opening_balance || 0
     let balance = openingBalance
 
@@ -152,6 +153,10 @@ export default function Customers({ activeShop, isSuperAdmin }) {
       if (isCredit) balance -= (ret.total || 0)
     })
 
+    // Combined Accounts settlements — same treatment as a credit return: money
+    // that reduced the balance with no invoice/payment record of its own.
+    settlements.forEach(st => { balance -= (st.amount || 0) })
+
     return balance
   }
 
@@ -164,7 +169,7 @@ export default function Customers({ activeShop, isSuperAdmin }) {
     setSelectedCustomer(c)
     setDetailTab('invoices')
     setInvoicesLoading(true)
-    const [{ data }, { data: returns }, { data: bankTx }] = await Promise.all([
+    const [{ data }, { data: returns }, { data: bankTx }, { data: settlements }] = await Promise.all([
       supabase.from('invoices')
         .select('*, salesmen(name), invoice_payments(*)')
         .eq('customer_id', c.id).eq('status', 'confirmed')
@@ -175,10 +180,12 @@ export default function Customers({ activeShop, isSuperAdmin }) {
         .eq('status', 'confirmed')
         .order('created_at', { ascending: true }),
       supabase.from('bank_transactions').select('*').ilike('reference', `%${c.name}%`).in('type', ['deposit', 'cheque_in']).order('created_at', { ascending: true }),
+      supabase.from('account_settlements').select('*, suppliers(name)').eq('customer_id', c.id).order('created_at', { ascending: true }),
     ])
     setCustomerInvoices(data || [])
     setCustomerReturns(returns || [])
     setCustomerBankTx(bankTx || [])
+    setCustomerSettlements(settlements || [])
     // Read opening_balance from DB
     const { data: fresh } = await supabase.from('customers').select('credit_balance, opening_balance').eq('id', c.id).single()
     setSelectedCustomer(prev => ({ ...prev, credit_balance: fresh?.credit_balance ?? c.credit_balance, opening_balance: fresh?.opening_balance ?? c.opening_balance ?? 0 }))
@@ -208,7 +215,7 @@ export default function Customers({ activeShop, isSuperAdmin }) {
     // any customer-level credit not tied to a specific invoice's credit_amount is applied
     // FIFO to the oldest unpaid invoices first, so what's offered to settle here matches
     // what the customer actually owes on each invoice, not an inflated per-invoice figure.
-    const liveClosingBalanceForPlan = computeCustomerBalance(selectedCustomer, customerInvoices, customerReturns, customerBankTx)
+    const liveClosingBalanceForPlan = computeCustomerBalance(selectedCustomer, customerInvoices, customerReturns, customerBankTx, customerSettlements)
     const rawDuesForPlan = customerInvoices.map(inv => {
       const extraPaid = (inv.invoice_payments || [])
         .filter(p => p.cheque_status !== 'returned')
@@ -784,13 +791,13 @@ export default function Customers({ activeShop, isSuperAdmin }) {
 
     // Balance — single shared calculation, matches the Activity Statement exactly
     // (see computeCustomerBalance) so the stat card can never disagree with it.
-    const liveClosingBalance = computeCustomerBalance(selectedCustomer, customerInvoices, customerReturns, customerBankTx)
+    const liveClosingBalance = computeCustomerBalance(selectedCustomer, customerInvoices, customerReturns, customerBankTx, customerSettlements)
 
     return (
       <div>
         {showPayModal && (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <div style={{ background: 'white', borderRadius: '16px', padding: '28px', width: '520px', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ background: 'white', borderRadius: '16px', padding: '28px', width: '100%', maxWidth: '520px', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
               <h2 style={{ fontSize: '17px', fontWeight: '700', color: '#0f172a', margin: '0 0 4px' }}>Receive Payment</h2>
               <p style={{ fontSize: '13px', color: '#64748b', margin: '0 0 18px' }}>{selectedCustomer.name} · Outstanding: <strong style={{ color: '#e11d48' }}>{formatCurrency(Math.max(0, selectedCustomer.credit_balance || 0))}</strong></p>
               <div style={{ marginBottom: '14px' }}>
@@ -906,7 +913,7 @@ export default function Customers({ activeShop, isSuperAdmin }) {
         {editPayment && (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             onClick={() => setEditPayment(null)}>
-            <div style={{ background: 'white', borderRadius: '14px', padding: '28px', width: '400px', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}
+            <div style={{ background: 'white', borderRadius: '14px', padding: '28px', width: '100%', maxWidth: '400px', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}
               onClick={e => e.stopPropagation()}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                 <div>
@@ -1704,6 +1711,15 @@ export default function Customers({ activeShop, isSuperAdmin }) {
                 })
               })
 
+              // 4. Combined Accounts settlements
+              customerSettlements.forEach(st => {
+                events.push({
+                  date: st.created_at, type: 'settlement', ref: '—',
+                  desc: `Settlement — offset against ${st.suppliers?.name || 'supplier'} account`,
+                  debit: 0, credit: st.amount || 0,
+                })
+              })
+
               events.sort((a, b) => new Date(a.date) - new Date(b.date))
               let balance = 0
               const rows = events.map(e => {
@@ -1798,7 +1814,7 @@ export default function Customers({ activeShop, isSuperAdmin }) {
         {viewingInvoice && (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             onClick={e => { if (e.target === e.currentTarget) { setViewingInvoice(null); setViewInvoiceItems([]) } }}>
-            <div style={{ background: 'white', borderRadius: '16px', padding: '28px', width: '620px', maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ background: 'white', borderRadius: '16px', padding: '28px', width: '100%', maxWidth: '620px', maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
                 <div>
                   <h2 style={{ fontSize: '18px', fontWeight: '800', color: '#0f172a', margin: '0 0 4px' }}>{viewingInvoice.invoice_no}</h2>
@@ -1918,7 +1934,7 @@ export default function Customers({ activeShop, isSuperAdmin }) {
         {viewingReturn && (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1001, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             onClick={e => { if (e.target === e.currentTarget) { setViewingReturn(null); setViewReturnItems([]) } }}>
-            <div style={{ background: 'white', borderRadius: '16px', padding: '28px', width: '540px', maxHeight: '82vh', overflowY: 'auto', boxShadow: '0 24px 80px rgba(0,0,0,0.4)' }}>
+            <div style={{ background: 'white', borderRadius: '16px', padding: '28px', width: '100%', maxWidth: '540px', maxHeight: '82vh', overflowY: 'auto', boxShadow: '0 24px 80px rgba(0,0,0,0.4)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
@@ -2008,7 +2024,7 @@ export default function Customers({ activeShop, isSuperAdmin }) {
       {showEditModal && editingCustomer && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           onClick={() => setShowEditModal(false)}>
-          <div style={{ background: 'white', borderRadius: '14px', padding: '28px', width: '420px', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}
+          <div style={{ background: 'white', borderRadius: '14px', padding: '28px', width: '100%', maxWidth: '420px', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}
             onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
               <div>

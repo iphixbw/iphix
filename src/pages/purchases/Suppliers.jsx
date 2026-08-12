@@ -33,6 +33,7 @@ export default function Suppliers({ isSuperAdmin }) {
   const [selectedSupplier, setSelectedSupplier] = useState(null)
   const [supplierPurchases, setSupplierPurchases] = useState([])
   const [supplierReturns, setSupplierReturns] = useState([])
+  const [supplierSettlements, setSupplierSettlements] = useState([])
   const [supplierBankTx, setSupplierBankTx] = useState([]) // direct payments (opening balance)
   const [purchasesLoading, setPurchasesLoading] = useState(false)
   const [detailTab, setDetailTab] = useState('purchases')
@@ -68,14 +69,16 @@ export default function Suppliers({ isSuperAdmin }) {
     setSelectedSupplier(sup)
     setDetailTab('purchases')
     setPurchasesLoading(true)
-    const [{ data: purchases }, { data: returns }, { data: bankTx }] = await Promise.all([
+    const [{ data: purchases }, { data: returns }, { data: bankTx }, { data: settlements }] = await Promise.all([
       supabase.from('purchases').select('*, purchase_payments(*), shops(name)').eq('supplier_id', sup.id).eq('status', 'confirmed').order('created_at', { ascending: true }),
       supabase.from('purchase_returns').select('*').eq('supplier_id', sup.id).eq('status', 'confirmed').order('created_at', { ascending: true }),
       supabase.from('bank_transactions').select('*').ilike('reference', `%${sup.name}%`).in('type', ['withdrawal', 'cheque_out']).order('created_at', { ascending: true }),
+      supabase.from('account_settlements').select('*, customers(name)').eq('supplier_id', sup.id).order('created_at', { ascending: true }),
     ])
     setSupplierPurchases(purchases || [])
     setSupplierReturns(returns || [])
     setSupplierBankTx(bankTx || [])
+    setSupplierSettlements(settlements || [])
 
     // Re-read fresh balance from DB — never recompute here so opening balances are preserved
     const { data: fresh } = await supabase.from('suppliers').select('outstanding_balance, opening_balance').eq('id', sup.id).single()
@@ -560,7 +563,7 @@ export default function Suppliers({ isSuperAdmin }) {
         {/* FIFO Pay Modal */}
         {showPayModal && (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <div style={{ background: 'white', borderRadius: '16px', padding: '28px', width: '520px', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ background: 'white', borderRadius: '16px', padding: '28px', width: '100%', maxWidth: '520px', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
               <h2 style={{ fontSize: '17px', fontWeight: '700', color: '#0f172a', margin: '0 0 4px' }}>Pay Supplier</h2>
               <p style={{ fontSize: '13px', color: '#64748b', margin: '0 0 18px' }}>
                 {selectedSupplier.name} · Outstanding: <strong style={{ color: '#e11d48' }}>{formatCurrency(Math.max(0, selectedSupplier.outstanding_balance || 0))}</strong>
@@ -1352,6 +1355,15 @@ export default function Suppliers({ isSuperAdmin }) {
                 })
               })
 
+              // 4. Combined Accounts settlements
+              supplierSettlements.forEach(st => {
+                events.push({
+                  date: st.created_at, type: 'settlement', ref: '—',
+                  desc: `Settlement — offset against ${st.customers?.name || 'customer'} account`,
+                  debit: 0, credit: st.amount || 0,
+                })
+              })
+
               events.sort((a, b) => new Date(a.date) - new Date(b.date))
               let balance = 0
               const rows = events.map(e => {
@@ -1449,7 +1461,7 @@ export default function Suppliers({ isSuperAdmin }) {
         {viewingPurchase && (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             onClick={e => { if (e.target === e.currentTarget) { setViewingPurchase(null); setViewPurchaseItems([]) } }}>
-            <div style={{ background: 'white', borderRadius: '16px', padding: '28px', width: '620px', maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ background: 'white', borderRadius: '16px', padding: '28px', width: '100%', maxWidth: '620px', maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
                 <div>
                   <h2 style={{ fontSize: '18px', fontWeight: '800', color: '#0f172a', margin: '0 0 4px' }}>{viewingPurchase.purchase_no}</h2>
@@ -1575,7 +1587,7 @@ export default function Suppliers({ isSuperAdmin }) {
         {viewingPurchaseReturn && (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1001, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             onClick={e => { if (e.target === e.currentTarget) { setViewingPurchaseReturn(null); setViewPurchaseReturnItems([]) } }}>
-            <div style={{ background: 'white', borderRadius: '16px', padding: '28px', width: '540px', maxHeight: '82vh', overflowY: 'auto', boxShadow: '0 24px 80px rgba(0,0,0,0.4)' }}>
+            <div style={{ background: 'white', borderRadius: '16px', padding: '28px', width: '100%', maxWidth: '540px', maxHeight: '82vh', overflowY: 'auto', boxShadow: '0 24px 80px rgba(0,0,0,0.4)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>

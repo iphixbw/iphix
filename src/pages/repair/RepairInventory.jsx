@@ -9,6 +9,7 @@ export default function RepairInventory({ shop }) {
   const [tab, setTab] = useState('parts')
   const [parts, setParts] = useState([])
   const [stockValues, setStockValues] = useState({}) // part_id -> FIFO value
+  const [unitCosts, setUnitCosts] = useState({}) // part_id -> weighted average cost per unit
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
@@ -83,10 +84,23 @@ export default function RepairInventory({ shop }) {
       from += PAGE_SIZE
     }
     const values = {}
+    const quantities = {}
     for (const b of allBatches) {
       values[b.part_id] = (values[b.part_id] || 0) + (b.quantity_remaining || 0) * (b.unit_cost || 0)
+      quantities[b.part_id] = (quantities[b.part_id] || 0) + (b.quantity_remaining || 0)
     }
     setStockValues(values)
+    // Per-unit cost shown in the list — the weighted average across all
+    // remaining batches (total FIFO value ÷ total quantity), the right figure
+    // for an inventory overview ("what's my cost basis on this part right
+    // now") as opposed to the next-unit-specific FIFO cost shown when adding
+    // a part to a sale/job, where what matters is exactly what THAT unit
+    // will cost when it's actually consumed.
+    const avgCosts = {}
+    for (const partId in values) {
+      avgCosts[partId] = quantities[partId] > 0 ? values[partId] / quantities[partId] : 0
+    }
+    setUnitCosts(avgCosts)
     setLoading(false)
   }
 
@@ -164,7 +178,7 @@ export default function RepairInventory({ shop }) {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: '#fdf8f3', borderBottom: '2px solid #f3ede4' }}>
-                {['SKU', 'Part Name', 'Category', 'Stock', 'Min', 'FIFO Value', 'Selling Price', ''].map(h => (
+                {['SKU', 'Part Name', 'Category', 'Stock', 'Min', 'Cost', 'FIFO Value', 'Selling Price', ''].map(h => (
                   <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: '10px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>{h}</th>
                 ))}
               </tr>
@@ -179,6 +193,7 @@ export default function RepairInventory({ shop }) {
                     <td style={{ padding: '10px 14px', fontSize: '12px', color: '#78716c' }}>{p.category || '—'}</td>
                     <td style={{ padding: '10px 14px', fontWeight: '700', color: low ? '#e11d48' : '#292524' }}>{p.current_stock || 0}</td>
                     <td style={{ padding: '10px 14px', fontSize: '12px', color: '#a89478' }}>{p.min_stock || 0}</td>
+                    <td style={{ padding: '10px 14px', fontSize: '13px', color: '#78716c' }}>{formatLKR(unitCosts[p.id] || 0)}</td>
                     <td style={{ padding: '10px 14px', fontSize: '13px' }}>{formatLKR(stockValues[p.id] || 0)}</td>
                     <td style={{ padding: '10px 14px', fontSize: '13px', fontWeight: '600', color: '#166534' }}>{formatLKR(p.selling_price)}</td>
                     <td style={{ padding: '10px 14px' }}>{low && <span style={{ fontSize: '11px', fontWeight: '700', color: '#ea580c' }}>⚠ Low</span>}</td>

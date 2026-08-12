@@ -11,6 +11,8 @@ import InvoiceView from './billing/InvoiceView'
 import Items from './billing/Items'
 import Settings from './Settings'
 import Suppliers from './purchases/Suppliers'
+import CombinedAccounts from './finance/CombinedAccounts'
+import Lending from './finance/Lending'
 import PurchaseList from './purchases/PurchaseList'
 import NewPurchase from './purchases/NewPurchase'
 import Inventory from './purchases/Inventory'
@@ -31,6 +33,7 @@ import HRModule from './hr/HRModule'
 
 export default function Dashboard({ session, activeShop, isSuperAdmin, onShopChange, onEnterRepairDivision }) {
   const [loggingOut, setLoggingOut] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [activePage, setActivePage] = useState(() => {
     const saved = localStorage.getItem('iphix_active_page')
     // Don't restore transient pages that require context
@@ -175,6 +178,7 @@ export default function Dashboard({ session, activeShop, isSuperAdmin, onShopCha
   function navigateTo(page) {
     localStorage.setItem('iphix_active_page', page)
     setActivePage(page)
+    setSidebarOpen(false)
   }
 
   const handleLogout = async () => {
@@ -196,6 +200,8 @@ export default function Dashboard({ session, activeShop, isSuperAdmin, onShopCha
     { id: 'stock',            icon: '📦', label: 'Inventory',        section: 'STOCK',    roles: ['all'] },
     { id: 'stock_transfer',   icon: '🔀', label: 'Stock Transfer',   section: 'STOCK',    roles: ['admin', 'manager'] },
     { id: 'suppliers',        icon: '🏭', label: 'Suppliers',        section: 'STOCK',    roles: ['admin', 'manager'] },
+    { id: 'combined_accounts', icon: '⇄', label: 'Combined Accounts', section: 'FINANCE',  roles: ['admin', 'manager'] },
+    { id: 'lending',          icon: '🤝', label: 'Personal Lending',  section: 'FINANCE',  roles: ['admin', 'manager'] },
     { id: 'procurement',      icon: '🏪', label: '3rd Party',        section: 'STOCK',    roles: ['admin', 'manager'] },
     { id: 'cashflow',         icon: '💵', label: 'Cashflow',         section: 'FINANCE',  roles: ['admin', 'manager'] },
     { id: 'bank',             icon: '🏦', label: 'Bank',             section: 'FINANCE',  roles: ['admin', 'manager'] },
@@ -258,6 +264,8 @@ export default function Dashboard({ session, activeShop, isSuperAdmin, onShopCha
       case 'items': return <Items isCashier={isCashier} />
       case 'settings': return <Settings session={session} />
       case 'suppliers': return <Suppliers isSuperAdmin={isSuperAdmin} />
+      case 'combined_accounts': return <CombinedAccounts />
+      case 'lending': return <Lending activeShop={activeShop} />
       case 'inventory': return <PurchaseList onNewPurchase={() => navigateTo('new_purchase')} />
       case 'new_purchase': return <NewPurchase onBack={() => navigateTo('inventory')} activeShop={activeShop} isCashier={isCashier} />
       case 'stock': return <Inventory isCashier={isCashier} />
@@ -587,8 +595,24 @@ export default function Dashboard({ session, activeShop, isSuperAdmin, onShopCha
     <div style={{ display: 'flex', minHeight: '100vh', background: '#f8fafc', fontFamily: 'system-ui, -apple-system, sans-serif' }}>
       <Toaster position="top-right" />
 
+      {/* Mobile/tablet top bar — hidden on desktop via CSS */}
+      <div className="iphix-mobile-topbar" style={{ display: 'none', position: 'fixed', top: 0, left: 0, right: 0, height: '58px', background: '#0b1220', alignItems: 'center', gap: '12px', padding: '0 14px', zIndex: 200, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+        <button onClick={() => setSidebarOpen(v => !v)} aria-label="Toggle menu"
+          style={{ background: 'rgba(255,255,255,0.08)', border: 'none', borderRadius: '8px', width: '38px', height: '38px', color: '#60a5fa', fontSize: '18px', cursor: 'pointer', flexShrink: 0 }}>
+          ☰
+        </button>
+        <Logo size={28} radius={8} />
+        <div style={{ color: 'white', fontWeight: '700', fontSize: '14px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>iPHIX Technologies</div>
+      </div>
+
+      {/* Overlay — closes the drawer when tapped, mobile/tablet only */}
+      {sidebarOpen && (
+        <div className="iphix-sidebar-overlay" onClick={() => setSidebarOpen(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 150 }} />
+      )}
+
       {/* Sidebar */}
-      <div style={{ width: '244px', minHeight: '100vh', background: 'linear-gradient(180deg, #0b1220 0%, #0f1e3d 100%)', display: 'flex', flexDirection: 'column', position: 'fixed', left: 0, top: 0, bottom: 0, zIndex: 100 }}>
+      <div className={`iphix-sidebar${sidebarOpen ? ' open' : ''}`} style={{ width: '244px', minHeight: '100vh', background: 'linear-gradient(180deg, #0b1220 0%, #0f1e3d 100%)', display: 'flex', flexDirection: 'column', position: 'fixed', left: 0, top: 0, bottom: 0, zIndex: 180 }}>
         <div style={{ padding: '22px 18px', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '11px' }}>
             <Logo size={36} radius={10} />
@@ -602,7 +626,7 @@ export default function Dashboard({ session, activeShop, isSuperAdmin, onShopCha
         {!isCashier && (
           <div style={{ padding: '10px 10px 4px' }}>
             <button onClick={() => navigateTo('dashboard')}
-              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', borderRadius: '9px', border: 'none', cursor: 'pointer', background: activePage === 'dashboard' ? 'linear-gradient(135deg, #2563eb, #1d4ed8)' : 'transparent', color: activePage === 'dashboard' ? 'white' : '#93a5c9', fontSize: '13px', fontWeight: activePage === 'dashboard' ? '600' : '400', textAlign: 'left', boxShadow: activePage === 'dashboard' ? '0 4px 12px rgba(37,99,235,0.3)' : 'none', transition: 'background 0.12s, color 0.12s' }}
+              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '11px 12px', borderRadius: '9px', border: 'none', cursor: 'pointer', background: activePage === 'dashboard' ? 'linear-gradient(135deg, #2563eb, #1d4ed8)' : 'transparent', color: activePage === 'dashboard' ? 'white' : '#93a5c9', fontSize: '14px', fontWeight: activePage === 'dashboard' ? '600' : '400', textAlign: 'left', boxShadow: activePage === 'dashboard' ? '0 4px 12px rgba(37,99,235,0.3)' : 'none', transition: 'background 0.12s, color 0.12s' }}
               onMouseEnter={e => { if (activePage !== 'dashboard') { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = 'white' } }}
               onMouseLeave={e => { if (activePage !== 'dashboard') { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#93a5c9' } }}>
               <span style={{ fontSize: '15px' }}>⊞</span> Dashboard
@@ -616,7 +640,7 @@ export default function Dashboard({ session, activeShop, isSuperAdmin, onShopCha
               <div style={{ color: '#4a628f', fontSize: '10px', fontWeight: '700', letterSpacing: '0.1em', padding: '14px 12px 4px', textTransform: 'uppercase' }}>{section}</div>
               {menuItems.filter(m => m.section === section).map(item => (
                 <button key={item.id} onClick={() => navigateTo(item.id)}
-                  style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', borderRadius: '9px', border: 'none', cursor: 'pointer', marginBottom: '2px', background: isActive(item.id) ? 'linear-gradient(135deg, #2563eb, #1d4ed8)' : 'transparent', color: isActive(item.id) ? 'white' : '#93a5c9', fontSize: '13px', fontWeight: isActive(item.id) ? '600' : '400', textAlign: 'left', boxShadow: isActive(item.id) ? '0 4px 12px rgba(37,99,235,0.3)' : 'none', transition: 'background 0.12s, color 0.12s' }}
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '11px 12px', borderRadius: '9px', border: 'none', cursor: 'pointer', marginBottom: '2px', background: isActive(item.id) ? 'linear-gradient(135deg, #2563eb, #1d4ed8)' : 'transparent', color: isActive(item.id) ? 'white' : '#93a5c9', fontSize: '14px', fontWeight: isActive(item.id) ? '600' : '400', textAlign: 'left', boxShadow: isActive(item.id) ? '0 4px 12px rgba(37,99,235,0.3)' : 'none', transition: 'background 0.12s, color 0.12s' }}
                   onMouseEnter={e => { if (!isActive(item.id)) { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = 'white' } }}
                   onMouseLeave={e => { if (!isActive(item.id)) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#93a5c9' } }}>
                   <span style={{ fontSize: '15px' }}>{item.icon}</span>
@@ -677,9 +701,30 @@ export default function Dashboard({ session, activeShop, isSuperAdmin, onShopCha
       </div>
 
       {/* Main content */}
-      <div style={{ marginLeft: '244px', flex: 1, padding: '32px' }}>
+      <div className="iphix-main-content" style={{ marginLeft: '244px', flex: 1, padding: '32px', width: '100%', boxSizing: 'border-box' }}>
         {renderPage()}
       </div>
+
+      <style>{`
+        @media (max-width: 900px) {
+          .iphix-mobile-topbar { display: flex !important; }
+          .iphix-sidebar {
+            transform: translateX(-100%);
+            transition: transform 0.25s ease;
+            box-shadow: 4px 0 24px rgba(0,0,0,0.3);
+          }
+          .iphix-sidebar.open { transform: translateX(0); }
+          .iphix-main-content {
+            margin-left: 0 !important;
+            padding: 16px !important;
+            padding-top: 74px !important;
+            max-width: 100vw;
+          }
+        }
+        @media (min-width: 901px) {
+          .iphix-sidebar-overlay { display: none !important; }
+        }
+      `}</style>
     </div>
   )
 }

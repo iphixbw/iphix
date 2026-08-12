@@ -14,6 +14,7 @@ export default function RepairJobDetail({ jobId, shop, onBack }) {
   const [parts, setParts] = useState([])
   const [loading, setLoading] = useState(true)
   const [showAddPart, setShowAddPart] = useState(false)
+  const [showAddOutsideRepair, setShowAddOutsideRepair] = useState(false)
   const [showAddCharge, setShowAddCharge] = useState(false)
   const [showCollectCash, setShowCollectCash] = useState(false)
   const [showVoid, setShowVoid] = useState(false)
@@ -181,6 +182,7 @@ export default function RepairJobDetail({ jobId, shop, onBack }) {
   const card = { background: 'white', borderRadius: '16px', padding: '20px', border: '1px solid #f3ede4', boxShadow: '0 1px 3px rgba(28,25,23,0.05)', marginBottom: '16px' }
   const lbl = { fontSize: '10px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase', marginBottom: '3px' }
   const paidSoFar = (job.deposit_received || 0) + jobPayments.reduce((s, p) => s + p.amount, 0)
+  const outsideRepair = thirdPartyItems.find(t => t.is_outside_repair)
 
   return (
     <div>
@@ -265,7 +267,7 @@ export default function RepairJobDetail({ jobId, shop, onBack }) {
               <h3 style={{ fontSize: '14px', fontWeight: '800', color: '#1c1917', margin: 0 }}>🔩 Repair Parts Used</h3>
               <button onClick={() => setShowAddPart(true)} style={{ padding: '6px 14px', background: '#fef3e2', color: '#d4881f', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: '700' }}>+ Add Part</button>
             </div>
-            {jobParts.length === 0 && thirdPartyItems.length === 0 ? <div style={{ fontSize: '12.5px', color: '#a89478', padding: '10px 0' }}>No parts added yet.</div> : (
+            {jobParts.length === 0 && thirdPartyItems.filter(t => !t.is_outside_repair).length === 0 ? <div style={{ fontSize: '12.5px', color: '#a89478', padding: '10px 0' }}>No parts added yet.</div> : (
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
                 <thead><tr style={{ borderBottom: '1px solid #f3ede4' }}>
                   {['Part', 'Qty', 'Price', 'Total', ''].map(h => <th key={h} style={{ padding: '6px 8px', textAlign: 'left', fontSize: '10px', color: '#a89478', textTransform: 'uppercase' }}>{h}</th>)}
@@ -299,23 +301,95 @@ export default function RepairJobDetail({ jobId, shop, onBack }) {
                       </td>
                     </tr>
                   ))}
-                  {thirdPartyItems.map(t => (
+                  {thirdPartyItems.filter(t => !t.is_outside_repair).map(t => (
                     <tr key={t.id} style={{ borderBottom: '1px solid #f8f5f0', background: '#fef3e2' }}>
                       <td style={{ padding: '7px 8px', fontWeight: '600' }}>{t.item_name} <span style={{ fontSize: '9px', fontWeight: '700', color: '#d4881f', background: '#fde68a', padding: '1px 6px', borderRadius: '6px', marginLeft: '4px' }}>3RD PARTY</span></td>
                       <td style={{ padding: '7px 8px' }}>{t.quantity}</td>
                       <td style={{ padding: '7px 8px' }}>{formatLKR(t.selling_price)}</td>
                       <td style={{ padding: '7px 8px', fontWeight: '700', color: '#166534' }}>{formatLKR(t.selling_price * t.quantity)}</td>
                       <td style={{ padding: '7px 8px' }}>
-                        <button onClick={async () => { await supabase.from('repair_third_party_items').delete().eq('id', t.id); refreshAndRecalc() }} style={{ background: 'none', border: 'none', color: '#e11d48', cursor: 'pointer', fontSize: '12px' }}>✕</button>
+                        <button onClick={async () => {
+                          if (!window.confirm(`Remove "${t.item_name}"? ${t.payment_status === 'pending' ? 'The linked supplier balance will be reduced accordingly.' : 'Any payment already made for it will be refunded.'}`)) return
+                          const amount = (t.cost_price || 0) * t.quantity
+                          try {
+                            if (amount > 0.009) {
+                              if (t.payment_status === 'paid') {
+                                if (t.payment_method === 'cash') {
+                                  await supabase.from('repair_cash_ledger').insert({ shop_id: job.shop_id, type: 'payment', amount, reference: job.job_no, notes: `3rd-party item removed: ${t.item_name}` })
+                                } else if (t.payment_method === 'bank' && t.bank_account_id) {
+                                  const { data: bank } = await supabase.from('bank_accounts').select('balance').eq('id', t.bank_account_id).single()
+                                  await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) + amount }).eq('id', t.bank_account_id)
+                                  await supabase.from('bank_transactions').insert({ bank_account_id: t.bank_account_id, type: 'deposit', amount, reference: `3rd-party item removed: ${job.job_no}`, notes: t.item_name })
+                                } else if (t.payment_method === 'customer_balance_deduction' && t.deducted_customer_id) {
+                                  await supabase.rpc('repair_adjust_customer_balance', { p_customer_id: t.deducted_customer_id, p_delta: amount })
+                                }
+                              } else if (t.supplier_id) {
+                                await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: t.supplier_id, p_delta: -amount })
+                              }
+                            }
+                            await supabase.from('repair_third_party_items').delete().eq('id', t.id)
+                            refreshAndRecalc()
+                          } catch (e) { toast.error('Failed to remove: ' + e.message) }
+                        }} style={{ background: 'none', border: 'none', color: '#e11d48', cursor: 'pointer', fontSize: '12px' }}>✕</button>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             )}
-            {thirdPartyItems.length > 0 && (
+            {thirdPartyItems.filter(t => !t.is_outside_repair).length > 0 && (
               <div style={{ marginTop: '10px', fontSize: '11px', color: '#8a7a63' }}>
                 ⚠ 3rd-party items shown above still need cost/payment settled — see <strong>3rd Party Items</strong> in Reports, or update directly.
+              </div>
+            )}
+          </div>
+
+          {/* Repaired by (outside repair) */}
+          <div style={card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: outsideRepair ? '12px' : 0 }}>
+              <h3 style={{ fontSize: '14px', fontWeight: '800', color: '#1c1917', margin: 0 }}>🔧 Repaired By</h3>
+              {!outsideRepair && (
+                <button onClick={() => setShowAddOutsideRepair(true)} style={{ padding: '6px 14px', background: '#fef3e2', color: '#d4881f', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: '700' }}>+ Sent to Outside Repairer</button>
+              )}
+            </div>
+            {!outsideRepair ? (
+              <div style={{ fontSize: '12.5px', color: '#a89478', marginTop: '10px' }}>Repaired in-house — not sent out.</div>
+            ) : (
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <div style={{ fontWeight: '700', fontSize: '14px' }}>{outsideRepair.item_name.replace(/^Outside repair — /, '')}</div>
+                    <div style={{ fontSize: '12px', color: '#8a7a63', marginTop: '2px' }}>
+                      Fee: {formatLKR(outsideRepair.cost_price * outsideRepair.quantity)} ·{' '}
+                      {outsideRepair.payment_status === 'paid'
+                        ? `Paid (${outsideRepair.payment_method === 'customer_balance_deduction' ? 'deducted from their balance' : outsideRepair.payment_method})`
+                        : 'On credit — still owed'}
+                    </div>
+                  </div>
+                  <button onClick={async () => {
+                    if (!window.confirm(`Remove this outside repair record? ${outsideRepair.payment_status === 'pending' ? 'The linked balance will be reduced accordingly.' : 'Any payment already made will be refunded.'}`)) return
+                    const amount = (outsideRepair.cost_price || 0) * outsideRepair.quantity
+                    try {
+                      if (amount > 0.009) {
+                        if (outsideRepair.payment_status === 'paid') {
+                          if (outsideRepair.payment_method === 'cash') {
+                            await supabase.from('repair_cash_ledger').insert({ shop_id: job.shop_id, type: 'payment', amount, reference: job.job_no, notes: `Outside repair removed: ${outsideRepair.item_name}` })
+                          } else if (outsideRepair.payment_method === 'bank' && outsideRepair.bank_account_id) {
+                            const { data: bank } = await supabase.from('bank_accounts').select('balance').eq('id', outsideRepair.bank_account_id).single()
+                            await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) + amount }).eq('id', outsideRepair.bank_account_id)
+                            await supabase.from('bank_transactions').insert({ bank_account_id: outsideRepair.bank_account_id, type: 'deposit', amount, reference: `Outside repair removed: ${job.job_no}`, notes: outsideRepair.item_name })
+                          } else if (outsideRepair.payment_method === 'customer_balance_deduction' && outsideRepair.deducted_customer_id) {
+                            await supabase.rpc('repair_adjust_customer_balance', { p_customer_id: outsideRepair.deducted_customer_id, p_delta: amount })
+                          }
+                        } else if (outsideRepair.supplier_id) {
+                          await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: outsideRepair.supplier_id, p_delta: -amount })
+                        }
+                      }
+                      await supabase.from('repair_third_party_items').delete().eq('id', outsideRepair.id)
+                      refreshAndRecalc()
+                    } catch (e) { toast.error('Failed to remove: ' + e.message) }
+                  }} style={{ background: 'none', border: 'none', color: '#e11d48', cursor: 'pointer', fontSize: '12px' }}>✕ Remove</button>
+                </div>
               </div>
             )}
           </div>
@@ -415,6 +489,7 @@ export default function RepairJobDetail({ jobId, shop, onBack }) {
       </div>
 
       {showAddPart && <AddPartModal shop={shop} parts={parts} onClose={() => setShowAddPart(false)} onAdded={() => { setShowAddPart(false); refreshAndRecalc() }} jobId={jobId} />}
+      {showAddOutsideRepair && <AddOutsideRepairModal shop={shop} job={job} onClose={() => setShowAddOutsideRepair(false)} onAdded={() => { setShowAddOutsideRepair(false); refreshAndRecalc() }} />}
       {showAddCharge && <AddChargeModal onClose={() => setShowAddCharge(false)} onAdded={() => { setShowAddCharge(false); refreshAndRecalc() }} jobId={jobId} />}
       {showCollectCash && <CollectPaymentModal job={job} balanceDue={job.balance_due} onClose={() => setShowCollectCash(false)} onCollected={() => { setShowCollectCash(false); refreshAndRecalc() }} />}
       {showVoid && <VoidJobModal job={job} jobParts={jobParts} thirdPartyItems={thirdPartyItems} jobPayments={jobPayments}
@@ -515,9 +590,15 @@ function VoidJobModal({ job, jobParts, thirdPartyItems, jobPayments, onClose, on
 
       // 2. Reverse any 3rd-party item that was already settled (real money paid
       // out to the source) — credit it back the same way it was recorded.
-      for (const t of settledThirdParty) {
+      // Pending (on-credit) items are reversed differently: their cost raised
+      // a supplier's balance at creation and was never paid, so that balance
+      // increase needs removing directly — this was previously missing here,
+      // meaning voiding a job with an unpaid 3rd-party item left a phantom
+      // debt to that supplier forever with nothing to explain it.
+      for (const t of thirdPartyItems) {
         const amount = (t.cost_price || 0) * t.quantity
-        if (amount > 0.009) {
+        if (amount <= 0.009) continue
+        if (t.payment_status === 'paid') {
           if (t.payment_method === 'cash') {
             await supabase.from('repair_cash_ledger').insert({
               shop_id: job.shop_id, type: 'payment', amount, reference: job.job_no,
@@ -530,10 +611,16 @@ function VoidJobModal({ job, jobParts, thirdPartyItems, jobPayments, onClose, on
               bank_account_id: t.bank_account_id, type: 'deposit', amount,
               reference: `Job voided: ${job.job_no}`, notes: `3rd-party item reversed: ${t.item_name}`,
             })
+          } else if (t.payment_method === 'customer_balance_deduction' && t.deducted_customer_id) {
+            // Was settled by reducing a customer's balance instead of paying
+            // cash/bank — reversing means giving that balance back.
+            await supabase.rpc('repair_adjust_customer_balance', { p_customer_id: t.deducted_customer_id, p_delta: amount })
           }
           // A cheque settlement for a 3rd-party item isn't offered as a payment
           // method in RepairThirdParty.jsx today, so there's no cheque case to
           // reverse here — if that changes, this needs a matching branch.
+        } else if (t.supplier_id) {
+          await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: t.supplier_id, p_delta: -amount })
         }
       }
       await supabase.from('repair_third_party_items').delete().eq('job_id', job.id)
@@ -834,6 +921,209 @@ function AddChargeModal({ jobId, onClose, onAdded }) {
         <div style={{ display: 'flex', gap: '10px' }}>
           <button onClick={onClose} style={{ flex: 1, padding: '10px', background: '#f5f1ea', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '700', color: '#78716c' }}>Cancel</button>
           <button onClick={handleAdd} disabled={saving} style={{ flex: 1, padding: '10px', background: 'linear-gradient(135deg,#f0b23d,#d4881f)', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '800', color: '#1c1917' }}>{saving ? 'Adding...' : 'Add'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Sending a job out to be repaired by someone outside the shop — reuses
+// repair_third_party_items (already correctly wired into job cost/profit
+// calculations, supplier balances, and void reversal for jobs) rather than
+// building parallel infrastructure, marked distinctly via is_outside_repair
+// so it never gets confused with a regular 3rd-party part. selling_price is
+// always 0 — this is purely a cost to the shop (who gets paid for the work),
+// never an extra charge to the customer, whose job total already covers the
+// full repair regardless of who actually did it.
+function AddOutsideRepairModal({ shop, job, onClose, onAdded }) {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState([])
+  const [selected, setSelected] = useState(null) // { kind: 'customer'|'supplier'|'new', id, name, balance }
+  const [description, setDescription] = useState('')
+  const [fee, setFee] = useState('')
+  const [paymentOption, setPaymentOption] = useState('credit') // 'credit' | 'pay_now' | 'deduct_balance'
+  const [payMethod, setPayMethod] = useState('cash')
+  const [bankAccountId, setBankAccountId] = useState('')
+  const [bankAccounts, setBankAccounts] = useState([])
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => { supabase.from('bank_accounts').select('*').order('name').then(({ data }) => setBankAccounts(data || [])) }, [])
+
+  useEffect(() => {
+    if (query.trim().length < 2 || selected) { setResults([]); return }
+    const t = setTimeout(async () => {
+      const [{ data: custs }, { data: sups }] = await Promise.all([
+        supabase.from('repair_customers').select('id, name, mobile, outstanding_balance').or(`name.ilike.%${query}%,mobile.ilike.%${query}%`).limit(6),
+        supabase.from('repair_suppliers').select('id, name, outstanding_balance').ilike('name', `%${query}%`).limit(6),
+      ])
+      setResults([
+        ...(custs || []).map(c => ({ kind: 'customer', id: c.id, name: c.name, sub: c.mobile, balance: c.outstanding_balance || 0 })),
+        ...(sups || []).map(s => ({ kind: 'supplier', id: s.id, name: s.name, sub: 'Supplier', balance: s.outstanding_balance || 0 })),
+      ])
+    }, 250)
+    return () => clearTimeout(t)
+  }, [query, selected])
+
+  function pickNewPerson() {
+    setSelected({ kind: 'new', id: null, name: query.trim(), balance: 0 })
+    setResults([])
+  }
+
+  // Deducting from a customer's balance only makes sense if they're an
+  // existing customer who currently owes the shop money.
+  const canDeductBalance = selected?.kind === 'customer' && selected.balance > 0.009
+
+  async function handleSave() {
+    const feeAmt = parseFloat(fee)
+    if (!selected) return toast.error('Search and select who did the repair')
+    if (!description.trim()) return toast.error('Describe what was repaired')
+    if (!feeAmt || feeAmt <= 0) return toast.error('Enter a valid fee')
+    if (paymentOption === 'pay_now' && (payMethod === 'bank') && !bankAccountId) return toast.error('Select a bank account')
+    if (paymentOption === 'deduct_balance' && !canDeductBalance) return toast.error('This person has no balance to deduct from')
+
+    setSaving(true)
+    let itemId = null
+    try {
+      const payment_status = paymentOption === 'credit' ? 'pending' : 'paid'
+      const payment_method = paymentOption === 'pay_now' ? payMethod : paymentOption === 'deduct_balance' ? 'customer_balance_deduction' : null
+
+      const { data: item, error } = await supabase.from('repair_third_party_items').insert({
+        shop_id: shop?.id || null, job_id: job.id, item_name: `Outside repair — ${description.trim()}`,
+        is_outside_repair: true, quantity: 1, selling_price: 0, cost_price: feeAmt,
+        supplier_id: selected.kind === 'supplier' ? selected.id : null,
+        supplier_name: selected.name,
+        deducted_customer_id: paymentOption === 'deduct_balance' ? selected.id : null,
+        payment_status, payment_method,
+        bank_account_id: (paymentOption === 'pay_now' && payMethod === 'bank') ? bankAccountId : null,
+      }).select().single()
+      if (error) throw error
+      itemId = item.id
+
+      if (paymentOption === 'credit') {
+        // Only a real linked supplier's balance can carry this debt forward —
+        // a customer or a brand-new person has no such account to raise, so
+        // it just sits as an unpaid record (same as any other free-text
+        // "Other" 3rd-party entry already works today).
+        if (selected.kind === 'supplier') {
+          const { error: balErr } = await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: selected.id, p_delta: feeAmt })
+          if (balErr) throw balErr
+        }
+      } else if (paymentOption === 'pay_now') {
+        if (payMethod === 'cash') {
+          const { error: cashErr } = await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'payment', amount: -feeAmt, reference: job.job_no, notes: `Outside repair — ${selected.name}` })
+          if (cashErr) throw cashErr
+        } else {
+          const bank = bankAccounts.find(b => b.id === bankAccountId)
+          const { error: bankErr } = await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) - feeAmt }).eq('id', bankAccountId)
+          if (bankErr) throw bankErr
+          const { error: txErr } = await supabase.from('bank_transactions').insert({ bank_account_id: bankAccountId, type: 'withdrawal', amount: feeAmt, reference: `Outside repair: ${job.job_no}`, notes: selected.name })
+          if (txErr) throw txErr
+        }
+      } else if (paymentOption === 'deduct_balance') {
+        const { error: balErr } = await supabase.rpc('repair_adjust_customer_balance', { p_customer_id: selected.id, p_delta: -feeAmt })
+        if (balErr) throw balErr
+      }
+
+      toast.success('Outside repair recorded')
+      onAdded()
+    } catch (e) {
+      if (itemId) await supabase.from('repair_third_party_items').delete().eq('id', itemId)
+      toast.error('Failed: ' + e.message)
+    }
+    setSaving(false)
+  }
+
+  const inp = { width: '100%', padding: '9px 12px', border: '1.5px solid #e7dfd3', borderRadius: '8px', fontSize: '13px', boxSizing: 'border-box' }
+  const lbl = { fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase', display: 'block', marginBottom: '5px' }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+      <div style={{ background: 'white', borderRadius: '18px', padding: '26px', width: '100%', maxWidth: '440px', maxHeight: '90vh', overflowY: 'auto' }}>
+        <h3 style={{ fontSize: '17px', fontWeight: '800', margin: '0 0 4px' }}>Sent to Outside Repairer</h3>
+        <p style={{ fontSize: '12px', color: '#8a7a63', margin: '0 0 16px' }}>This is a cost to you — it doesn't change what the customer pays for the job.</p>
+
+        <div style={{ marginBottom: '14px', position: 'relative' }}>
+          <label style={lbl}>Who repaired it?</label>
+          {selected ? (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 12px', background: '#fef3e2', borderRadius: '8px', border: '1.5px solid #e7dfd3', fontSize: '13px' }}>
+              <span style={{ fontWeight: '600' }}>
+                {selected.name}
+                <span style={{ fontSize: '11px', color: '#a89478', fontWeight: '500' }}>
+                  {' '}— {selected.kind === 'customer' ? `Customer, owes ${formatLKR(selected.balance)}` : selected.kind === 'supplier' ? 'Supplier' : 'New person'}
+                </span>
+              </span>
+              <button onClick={() => { setSelected(null); setQuery('') }} style={{ background: 'none', border: 'none', color: '#e11d48', cursor: 'pointer' }}>✕</button>
+            </div>
+          ) : (
+            <>
+              <input style={inp} placeholder="Search customers or suppliers by name..." value={query} onChange={e => setQuery(e.target.value)} />
+              {(results.length > 0 || query.trim().length >= 2) && (
+                <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1.5px solid #e7dfd3', borderRadius: '8px', marginTop: '2px', zIndex: 20, boxShadow: '0 8px 20px rgba(0,0,0,0.12)', maxHeight: '220px', overflowY: 'auto' }}>
+                  {results.map(r => (
+                    <div key={`${r.kind}-${r.id}`} onClick={() => { setSelected(r); setResults([]) }} style={{ padding: '9px 12px', cursor: 'pointer', fontSize: '13px', borderBottom: '1px solid #f8f5f0' }}>
+                      <div style={{ fontWeight: '600' }}>{r.name}</div>
+                      <div style={{ fontSize: '11px', color: '#a89478' }}>{r.kind === 'customer' ? `Customer · ${r.sub} · Owes ${formatLKR(r.balance)}` : 'Supplier'}</div>
+                    </div>
+                  ))}
+                  {query.trim().length >= 2 && (
+                    <div onClick={pickNewPerson} style={{ padding: '9px 12px', cursor: 'pointer', fontSize: '13px', fontWeight: '700', color: '#d4881f', background: '#fef3e2' }}>
+                      + "{query.trim()}" — new person, not in the system
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div style={{ marginBottom: '14px' }}>
+          <label style={lbl}>What was repaired</label>
+          <input style={inp} value={description} onChange={e => setDescription(e.target.value)} placeholder="e.g. motherboard repair" />
+        </div>
+
+        <div style={{ marginBottom: '14px' }}>
+          <label style={lbl}>Fee</label>
+          <input type="number" style={inp} value={fee} onChange={e => setFee(e.target.value)} />
+        </div>
+
+        <div style={{ marginBottom: '14px' }}>
+          <label style={lbl}>Payment</label>
+          <select style={inp} value={paymentOption} onChange={e => setPaymentOption(e.target.value)}>
+            <option value="credit">Leave on Credit — pay them later</option>
+            <option value="pay_now">Pay Now</option>
+            {canDeductBalance && <option value="deduct_balance">Deduct from what they owe you ({formatLKR(selected.balance)})</option>}
+          </select>
+        </div>
+
+        {paymentOption === 'pay_now' && (
+          <div style={{ marginBottom: '14px' }}>
+            <label style={lbl}>Method</label>
+            <select style={inp} value={payMethod} onChange={e => setPayMethod(e.target.value)}>
+              <option value="cash">Cash</option><option value="bank">Bank Transfer</option>
+            </select>
+          </div>
+        )}
+        {paymentOption === 'pay_now' && payMethod === 'bank' && (
+          <div style={{ marginBottom: '18px' }}>
+            <label style={lbl}>Bank Account</label>
+            <select style={inp} value={bankAccountId} onChange={e => setBankAccountId(e.target.value)}>
+              <option value="">Select...</option>
+              {bankAccounts.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </div>
+        )}
+
+        {paymentOption === 'credit' && selected?.kind !== 'supplier' && (
+          <div style={{ marginBottom: '18px', fontSize: '11px', color: '#a89478', background: '#fdf8f3', borderRadius: '8px', padding: '10px 12px' }}>
+            {selected?.kind === 'customer'
+              ? "This person isn't set up as a supplier, so this won't raise a formal supplier balance — it'll just sit here as unpaid until you settle it."
+              : 'A new person has no account to track a balance against — this will sit here as unpaid until you settle it.'}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button onClick={onClose} style={{ flex: 1, padding: '11px', background: '#f5f1ea', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '700' }}>Cancel</button>
+          <button onClick={handleSave} disabled={saving} style={{ flex: 1, padding: '11px', background: 'linear-gradient(135deg,#f0b23d,#d4881f)', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '800' }}>{saving ? 'Saving...' : 'Save'}</button>
         </div>
       </div>
     </div>
