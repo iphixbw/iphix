@@ -109,6 +109,8 @@ function NewJobModal({ shop, onClose, onCreated }) {
   const [customAccessory, setCustomAccessory] = useState('')
   const [savedAccessoryOptions, setSavedAccessoryOptions] = useState([])
   const [matchedCustomer, setMatchedCustomer] = useState(null)
+  const [nameResults, setNameResults] = useState([])
+  const [showNameDropdown, setShowNameDropdown] = useState(false)
   const [checkingMobile, setCheckingMobile] = useState(false)
   const [form, setForm] = useState({
     customer_name: '', customer_mobile: '', alt_mobile: '', email: '',
@@ -142,6 +144,29 @@ function NewJobModal({ shop, onClose, onCreated }) {
     }, 400)
     return () => clearTimeout(t)
   }, [form.customer_mobile])
+
+  // Reverse of the mobile lookup above — search by name while typing, and
+  // fill in the mobile (plus other details) once one is picked. The name
+  // field can only be edited while no customer is matched (same as the
+  // existing disabled-on-match behavior for the name field), so this never
+  // runs at the same time as an active mobile-based match.
+  useEffect(() => {
+    const name = form.customer_name.trim()
+    if (matchedCustomer || name.length < 2) { setNameResults([]); return }
+    const t = setTimeout(() => {
+      supabase.from('repair_customers').select('id, name, mobile, alt_mobile, email')
+        .ilike('name', `%${name}%`).limit(8)
+        .then(({ data }) => setNameResults(data || []))
+    }, 400)
+    return () => clearTimeout(t)
+  }, [form.customer_name, matchedCustomer])
+
+  function pickCustomerByName(c) {
+    setMatchedCustomer(c)
+    setForm(f => ({ ...f, customer_name: c.name, customer_mobile: c.mobile, alt_mobile: c.alt_mobile || f.alt_mobile, email: c.email || f.email }))
+    setNameResults([])
+    setShowNameDropdown(false)
+  }
 
   function toggleArr(field, val) {
     setForm(f => ({ ...f, [field]: f[field].includes(val) ? f[field].filter(v => v !== val) : [...f[field], val] }))
@@ -250,7 +275,31 @@ function NewJobModal({ shop, onClose, onCreated }) {
               )}
               {checkingMobile && <div style={{ marginTop: '5px', fontSize: '11px', color: '#a89478' }}>Searching...</div>}
             </div>
-            <div><label style={lbl}>Customer Name *</label><input style={inp} value={form.customer_name} onChange={e => setForm(f => ({ ...f, customer_name: e.target.value }))} disabled={!!matchedCustomer} /></div>
+            <div style={{ position: 'relative' }}>
+              <label style={lbl}>Customer Name *</label>
+              <input style={inp} value={form.customer_name}
+                onChange={e => { setForm(f => ({ ...f, customer_name: e.target.value })); setShowNameDropdown(true) }}
+                onFocus={() => setShowNameDropdown(true)}
+                disabled={!!matchedCustomer} placeholder="Start typing to search..." />
+              {matchedCustomer && (
+                <div style={{ marginTop: '5px', fontSize: '11.5px', color: '#166534', fontWeight: '700' }}>
+                  ✓ Existing customer — mobile filled in automatically
+                </div>
+              )}
+              {showNameDropdown && !matchedCustomer && nameResults.length > 0 && (
+                <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1.5px solid #e7dfd3', borderRadius: '8px', marginTop: '2px', zIndex: 20, boxShadow: '0 8px 20px rgba(0,0,0,0.12)', maxHeight: '200px', overflowY: 'auto' }}>
+                  {nameResults.map(c => (
+                    <div key={c.id} onClick={() => pickCustomerByName(c)}
+                      style={{ padding: '9px 12px', cursor: 'pointer', fontSize: '13px', borderBottom: '1px solid #f8f5f0' }}
+                      onMouseEnter={e => e.currentTarget.style.background = '#fdf8f3'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'white'}>
+                      <div style={{ fontWeight: '600' }}>{c.name}</div>
+                      <div style={{ fontSize: '11px', color: '#a89478' }}>{c.mobile}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
             <div><label style={lbl}>Alternative Number</label><input style={inp} value={form.alt_mobile} onChange={e => setForm(f => ({ ...f, alt_mobile: e.target.value }))} /></div>
             <div><label style={lbl}>Email</label><input style={inp} value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} /></div>
           </div>

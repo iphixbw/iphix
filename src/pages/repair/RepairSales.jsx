@@ -14,6 +14,7 @@ export default function RepairSales({ shop }) {
   const [showNew, setShowNew] = useState(false)
   const [payingSale, setPayingSale] = useState(null)
   const [voidingSale, setVoidingSale] = useState(null)
+  const [viewingSale, setViewingSale] = useState(null)
 
   useEffect(() => { fetchSales() }, [shop?.id])
 
@@ -66,13 +67,13 @@ export default function RepairSales({ shop }) {
             <tbody>
               {sales.map((s, i) => (
                 <tr key={s.id} style={{ borderBottom: '1px solid #f8f5f0', background: s.status === 'voided' ? '#faf9f7' : i % 2 === 0 ? 'white' : '#fdfbf8', opacity: s.status === 'voided' ? 0.6 : 1 }}>
-                  <td style={{ padding: '11px 14px', fontWeight: '700', color: '#d4881f' }}>{s.sale_no}</td>
-                  <td style={{ padding: '11px 14px' }}>{s.repair_customers?.name || s.customer_name || 'Walk-in'}</td>
-                  <td style={{ padding: '11px 14px', fontSize: '12px', color: '#78716c' }}>{timeAgo(s.created_at)}</td>
-                  <td style={{ padding: '11px 14px', fontWeight: '700' }}>{formatLKR(s.total)}</td>
-                  <td style={{ padding: '11px 14px', color: '#059669' }}>{formatLKR(s.amount_paid)}</td>
-                  <td style={{ padding: '11px 14px', fontWeight: '700', color: (s.total - s.amount_paid) > 0 ? '#e11d48' : '#94a3b8' }}>{formatLKR(s.total - s.amount_paid)}</td>
-                  <td style={{ padding: '11px 14px', fontSize: '12px', textTransform: 'capitalize' }}>{s.payment_method}</td>
+                  <td onClick={() => setViewingSale(s)} style={{ padding: '11px 14px', fontWeight: '700', color: '#d4881f', cursor: 'pointer' }}>{s.sale_no}</td>
+                  <td onClick={() => setViewingSale(s)} style={{ padding: '11px 14px', cursor: 'pointer' }}>{s.repair_customers?.name || s.customer_name || 'Walk-in'}</td>
+                  <td onClick={() => setViewingSale(s)} style={{ padding: '11px 14px', fontSize: '12px', color: '#78716c', cursor: 'pointer' }}>{timeAgo(s.created_at)}</td>
+                  <td onClick={() => setViewingSale(s)} style={{ padding: '11px 14px', fontWeight: '700', cursor: 'pointer' }}>{formatLKR(s.total)}</td>
+                  <td onClick={() => setViewingSale(s)} style={{ padding: '11px 14px', color: '#059669', cursor: 'pointer' }}>{formatLKR(s.amount_paid)}</td>
+                  <td onClick={() => setViewingSale(s)} style={{ padding: '11px 14px', fontWeight: '700', color: (s.total - s.amount_paid) > 0 ? '#e11d48' : '#94a3b8', cursor: 'pointer' }}>{formatLKR(s.total - s.amount_paid)}</td>
+                  <td onClick={() => setViewingSale(s)} style={{ padding: '11px 14px', fontSize: '12px', textTransform: 'capitalize', cursor: 'pointer' }}>{s.payment_method}</td>
                   <td style={{ padding: '11px 14px' }}>
                     {s.status === 'voided'
                       ? <span style={{ padding: '3px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: '700', background: '#f1f5f9', color: '#64748b' }}>Voided</span>
@@ -106,6 +107,7 @@ export default function RepairSales({ shop }) {
       {showNew && <NewSaleModal shop={shop} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); fetchSales() }} />}
       {payingSale && <SalePaymentModal shop={shop} sale={payingSale} onClose={() => setPayingSale(null)} onPaid={() => { setPayingSale(null); fetchSales() }} />}
       {voidingSale && <VoidSaleModal shop={shop} sale={voidingSale} onClose={() => setVoidingSale(null)} onVoided={() => { setVoidingSale(null); fetchSales() }} />}
+      {viewingSale && <ViewSaleModal sale={viewingSale} onClose={() => setViewingSale(null)} />}
     </div>
   )
 }
@@ -616,6 +618,12 @@ function NewSaleModal({ shop, onClose, onCreated }) {
         </div>
 
         <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Parts</label>
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.7fr 1fr auto', gap: '8px', marginTop: '8px', marginBottom: '2px' }}>
+          <span style={{ fontSize: '10px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Part</span>
+          <span style={{ fontSize: '10px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Qty</span>
+          <span style={{ fontSize: '10px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Price</span>
+          <span></span>
+        </div>
         {rows.map((r, i) => (
           <div key={i} style={{ border: r.is_third_party ? '1.5px dashed #e7dfd3' : 'none', borderRadius: '8px', padding: r.is_third_party ? '8px' : 0, marginBottom: '8px', marginTop: '6px' }}>
             {r.is_third_party ? (
@@ -716,6 +724,85 @@ function NewSaleModal({ shop, onClose, onCreated }) {
           <button onClick={onClose} style={{ flex: 1, padding: '11px', background: '#f5f1ea', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '700', color: '#78716c' }}>Cancel</button>
           <button onClick={handleSave} disabled={saving} style={{ flex: 2, padding: '11px', background: 'linear-gradient(135deg,#f0b23d,#d4881f)', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '800', color: '#1c1917' }}>{saving ? 'Saving...' : '✓ Complete Sale'}</button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// Read-only invoice detail — reused from the Customers page too, so a sale
+// clicked from either the Parts Sales list or a customer's Activity
+// Statement shows the exact same thing.
+export function ViewSaleModal({ sale, onClose }) {
+  const [items, setItems] = useState(null)
+  const [tpItems, setTpItems] = useState([])
+
+  useEffect(() => {
+    async function load() {
+      const [{ data: si }, { data: tp }] = await Promise.all([
+        supabase.from('repair_sale_items').select('*, repair_parts(name, sku)').eq('sale_id', sale.id),
+        supabase.from('repair_third_party_items').select('*').eq('sale_id', sale.id),
+      ])
+      setItems(si || [])
+      setTpItems(tp || [])
+    }
+    load()
+  }, [sale.id])
+
+  const balanceDue = Math.max(0, (sale.total || 0) - (sale.amount_paid || 0))
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: '18px', padding: '26px', width: '100%', maxWidth: '480px', maxHeight: '85vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+          <h3 style={{ fontSize: '17px', fontWeight: '800', margin: 0, color: '#d4881f' }}>{sale.sale_no}</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: '#a89478' }}>✕</button>
+        </div>
+        <p style={{ fontSize: '13px', color: '#8a7a63', margin: '0 0 4px' }}>
+          {sale.repair_customers?.name || sale.customer_name || 'Walk-in'} · {timeAgo(sale.created_at)}
+        </p>
+        <p style={{ fontSize: '12px', color: '#a89478', margin: '0 0 16px', textTransform: 'capitalize' }}>
+          {sale.payment_method}{sale.status === 'voided' ? ' · Voided' : ''}
+        </p>
+
+        {items === null ? (
+          <div style={{ padding: '20px', textAlign: 'center', color: '#a89478', fontSize: '13px' }}>Loading...</div>
+        ) : (
+          <>
+            <div style={{ borderTop: '1px solid #f3ede4', borderBottom: '1px solid #f3ede4', padding: '8px 0', marginBottom: '10px' }}>
+              {items.map(it => (
+                <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: '13px' }}>
+                  <span>{it.repair_parts?.name || 'Part'} × {it.quantity} @ {formatLKR(it.unit_price)}</span>
+                  <span style={{ fontWeight: '700' }}>{formatLKR(it.line_total)}</span>
+                </div>
+              ))}
+              {tpItems.map(t => (
+                <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: '13px' }}>
+                  <span>{t.item_name} × {t.quantity} @ {formatLKR(t.selling_price)} <span style={{ fontSize: '11px', color: '#a89478' }}>(3rd-party)</span></span>
+                  <span style={{ fontWeight: '700' }}>{formatLKR(t.selling_price * t.quantity)}</span>
+                </div>
+              ))}
+              {items.length === 0 && tpItems.length === 0 && (
+                <div style={{ fontSize: '12px', color: '#a89478', padding: '6px 0' }}>No items on record.</div>
+              )}
+            </div>
+            {sale.transport_fee > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#78716c', marginBottom: '6px' }}>
+                <span>Transport Fee</span><span>{formatLKR(sale.transport_fee)}</span>
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '15px', fontWeight: '800', marginBottom: '4px' }}>
+              <span>Total</span><span>{formatLKR(sale.total)}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#059669', marginBottom: '4px' }}>
+              <span>Paid</span><span>{formatLKR(sale.amount_paid)}</span>
+            </div>
+            {balanceDue > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', fontWeight: '700', color: '#e11d48' }}>
+                <span>Balance Due</span><span>{formatLKR(balanceDue)}</span>
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   )

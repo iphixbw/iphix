@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../../supabase'
 import toast from 'react-hot-toast'
 import { formatLKR, statusMeta, timeAgo, isCollectedWithDue } from '../../lib/repairConstants'
+import { ViewSaleModal } from './RepairSales'
 
 export default function RepairCustomers({ shop, onOpenJob }) {
   const [customers, setCustomers] = useState([])
@@ -11,6 +12,7 @@ export default function RepairCustomers({ shop, onOpenJob }) {
   const [jobs, setJobs] = useState([])
   const [sales, setSales] = useState([])
   const [statement, setStatement] = useState([])
+  const [viewingTxn, setViewingTxn] = useState(null)
   const [detailTab, setDetailTab] = useState('statement')
   const [showReceivePayment, setShowReceivePayment] = useState(false)
 
@@ -95,20 +97,20 @@ export default function RepairCustomers({ shop, onOpenJob }) {
       // (Collect Payment on the job itself, or a customer-level payment
       // applied here) goes through repair_job_payments instead, shown below
       // as its own line, so this never double-counts with those.
-      events.push({ date: job.created_at, label: `Repair Job ${job.job_no} — ${job.phone_brand} ${job.phone_model}`, debit: job.grand_total || 0, credit: job.deposit_received || 0, type: 'job' })
+      events.push({ date: job.created_at, label: `Repair Job ${job.job_no} — ${job.phone_brand} ${job.phone_model}`, debit: job.grand_total || 0, credit: job.deposit_received || 0, type: 'job', source: job })
     })
     ;(jobPayments || []).forEach(jp => {
       const job = (j || []).find(job => job.id === jp.job_id)
-      events.push({ date: jp.created_at, label: `Payment (${jp.payment_method}) — Job ${job?.job_no || ''}`, debit: 0, credit: jp.amount, type: 'payment' })
+      events.push({ date: jp.created_at, label: `Payment (${jp.payment_method}) — Job ${job?.job_no || ''}`, debit: 0, credit: jp.amount, type: 'payment', source: jp })
     })
     ;(s || []).forEach(sale => {
-      events.push({ date: sale.created_at, label: `Parts Sale ${sale.sale_no}`, debit: sale.total || 0, credit: sale.amount_paid || 0, type: 'sale' })
+      events.push({ date: sale.created_at, label: `Parts Sale ${sale.sale_no}`, debit: sale.total || 0, credit: sale.amount_paid || 0, type: 'sale', source: { ...sale, repair_customers: { name: fresh?.name || c.name } } })
     })
     ;(standalone || []).forEach(sp => {
-      events.push({ date: sp.created_at, label: `Payment (${sp.payment_method}${sp.bank_accounts?.name ? ' — ' + sp.bank_accounts.name : ''})`, debit: 0, credit: sp.amount, type: 'payment' })
+      events.push({ date: sp.created_at, label: `Payment (${sp.payment_method}${sp.bank_accounts?.name ? ' — ' + sp.bank_accounts.name : ''})`, debit: 0, credit: sp.amount, type: 'payment', source: sp })
     })
     ;(saleReturns || []).forEach(r => {
-      events.push({ date: r.created_at, label: `Return ${r.return_no}`, debit: 0, credit: r.total, type: 'return' })
+      events.push({ date: r.created_at, label: `Return ${r.return_no}`, debit: 0, credit: r.total, type: 'return', source: r })
     })
     events.sort((a, b) => new Date(a.date) - new Date(b.date))
     let running = 0
@@ -220,15 +222,21 @@ export default function RepairCustomers({ shop, onOpenJob }) {
                     {['Date', 'Description', 'Charged', 'Paid', 'Balance'].map(h => <th key={h} style={{ padding: '6px 8px', textAlign: 'left', fontSize: '10px', color: '#a89478', textTransform: 'uppercase' }}>{h}</th>)}
                   </tr></thead>
                   <tbody>
-                    {statement.map((e, i) => (
-                      <tr key={i} style={{ borderBottom: '1px solid #f8f5f0' }}>
-                        <td style={{ padding: '7px 8px', color: '#78716c' }}>{timeAgo(e.date)}</td>
-                        <td style={{ padding: '7px 8px', fontWeight: '600' }}>{e.label}</td>
-                        <td style={{ padding: '7px 8px', color: '#e11d48' }}>{formatLKR(e.debit)}</td>
-                        <td style={{ padding: '7px 8px', color: '#059669' }}>{formatLKR(e.credit)}</td>
-                        <td style={{ padding: '7px 8px', fontWeight: '700' }}>{formatLKR(e.balance)}</td>
-                      </tr>
-                    ))}
+                    {statement.map((e, i) => {
+                      const clickable = e.type !== 'opening'
+                      return (
+                        <tr key={i} onClick={() => clickable && setViewingTxn(e)}
+                          style={{ borderBottom: '1px solid #f8f5f0', cursor: clickable ? 'pointer' : 'default' }}
+                          onMouseEnter={ev => clickable && (ev.currentTarget.style.background = '#fdf8f3')}
+                          onMouseLeave={ev => clickable && (ev.currentTarget.style.background = 'white')}>
+                          <td style={{ padding: '7px 8px', color: '#78716c' }}>{timeAgo(e.date)}</td>
+                          <td style={{ padding: '7px 8px', fontWeight: '600' }}>{e.label}</td>
+                          <td style={{ padding: '7px 8px', color: '#e11d48' }}>{formatLKR(e.debit)}</td>
+                          <td style={{ padding: '7px 8px', color: '#059669' }}>{formatLKR(e.credit)}</td>
+                          <td style={{ padding: '7px 8px', fontWeight: '700' }}>{formatLKR(e.balance)}</td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               )
@@ -277,8 +285,101 @@ export default function RepairCustomers({ shop, onOpenJob }) {
           onClose={() => setShowReceivePayment(false)}
           onPaid={() => { setShowReceivePayment(false); openCustomer(selected); fetchCustomers() }} />
       )}
+
+      {viewingTxn && viewingTxn.type === 'sale' && (
+        <ViewSaleModal sale={viewingTxn.source} onClose={() => setViewingTxn(null)} />
+      )}
+      {viewingTxn && viewingTxn.type !== 'sale' && (
+        <TransactionDetailModal event={viewingTxn} onClose={() => setViewingTxn(null)} />
+      )}
     </div>
   )
+}
+
+// Job/payment/return detail — sale type is handled separately by the shared
+// ViewSaleModal (same one used in Parts Sales), so this only needs to cover
+// the other three.
+function TransactionDetailModal({ event, onClose }) {
+  const [jobParts, setJobParts] = useState(null)
+  const [returnItems, setReturnItems] = useState(null)
+
+  useEffect(() => {
+    if (event.type === 'job') {
+      supabase.from('repair_job_parts').select('*, repair_parts(name)').eq('job_id', event.source.id).then(({ data }) => setJobParts(data || []))
+    } else if (event.type === 'return') {
+      supabase.from('repair_sale_return_items').select('*, repair_parts(name)').eq('return_id', event.source.id).then(({ data }) => setReturnItems(data || []))
+    }
+  }, [event])
+
+  const s = event.source
+  const wrap = (title, color, body) => (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: '18px', padding: '26px', width: '100%', maxWidth: '440px', maxHeight: '80vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+          <h3 style={{ fontSize: '17px', fontWeight: '800', margin: 0, color }}>{title}</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: '#a89478' }}>✕</button>
+        </div>
+        {body}
+      </div>
+    </div>
+  )
+
+  if (event.type === 'job') {
+    return wrap(`Job ${s.job_no}`, '#d4881f', (
+      <>
+        <p style={{ fontSize: '13px', color: '#8a7a63', margin: '0 0 16px' }}>{s.phone_brand} {s.phone_model} · {timeAgo(s.created_at)}</p>
+        {jobParts === null ? <div style={{ fontSize: '13px', color: '#a89478' }}>Loading...</div> : (
+          <div style={{ borderTop: '1px solid #f3ede4', borderBottom: '1px solid #f3ede4', padding: '8px 0', marginBottom: '10px' }}>
+            {jobParts.map(p => (
+              <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: '13px' }}>
+                <span>{p.repair_parts?.name || 'Part'} × {p.quantity}</span>
+                <span style={{ fontWeight: '700' }}>{formatLKR(p.line_total)}</span>
+              </div>
+            ))}
+            {jobParts.length === 0 && <div style={{ fontSize: '12px', color: '#a89478' }}>No parts recorded for this job.</div>}
+          </div>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '15px', fontWeight: '800' }}><span>Job Total</span><span>{formatLKR(s.grand_total)}</span></div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#059669' }}><span>Deposit Paid</span><span>{formatLKR(s.deposit_received)}</span></div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', fontWeight: '700', color: s.balance_due > 0 ? '#e11d48' : '#94a3b8' }}><span>Balance Due</span><span>{formatLKR(s.balance_due)}</span></div>
+      </>
+    ))
+  }
+
+  if (event.type === 'payment') {
+    return wrap('Payment', '#059669', (
+      <>
+        <p style={{ fontSize: '13px', color: '#8a7a63', margin: '0 0 16px' }}>{timeAgo(s.created_at)}</p>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '8px' }}><span>Amount</span><span style={{ fontWeight: '800', color: '#059669' }}>{formatLKR(s.amount)}</span></div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '8px', textTransform: 'capitalize' }}><span>Method</span><span>{s.payment_method}</span></div>
+        {s.bank_accounts?.name && <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '8px' }}><span>Account</span><span>{s.bank_accounts.name}</span></div>}
+        {s.notes && <div style={{ fontSize: '13px', color: '#78716c', marginTop: '8px' }}>{s.notes}</div>}
+      </>
+    ))
+  }
+
+  if (event.type === 'return') {
+    return wrap(`Return ${s.return_no}`, '#e11d48', (
+      <>
+        <p style={{ fontSize: '13px', color: '#8a7a63', margin: '0 0 4px' }}>{timeAgo(s.created_at)} · {s.payment_method}</p>
+        {s.remarks && <p style={{ fontSize: '13px', color: '#78716c', margin: '0 0 14px' }}>{s.remarks}</p>}
+        {returnItems === null ? <div style={{ fontSize: '13px', color: '#a89478' }}>Loading...</div> : (
+          <div style={{ borderTop: '1px solid #f3ede4', borderBottom: '1px solid #f3ede4', padding: '8px 0', marginBottom: '10px' }}>
+            {returnItems.map(it => (
+              <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: '13px' }}>
+                <span>{it.repair_parts?.name || 'Part'} × {it.quantity}</span>
+                <span style={{ fontWeight: '700' }}>{formatLKR(it.line_total)}</span>
+              </div>
+            ))}
+            {returnItems.length === 0 && <div style={{ fontSize: '12px', color: '#a89478' }}>No items on record.</div>}
+          </div>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '15px', fontWeight: '800' }}><span>Total Refund</span><span>{formatLKR(s.total)}</span></div>
+      </>
+    ))
+  }
+
+  return null
 }
 
 // Item 7: receive a standalone payment against a customer's outstanding

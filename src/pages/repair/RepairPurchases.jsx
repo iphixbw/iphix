@@ -3,7 +3,7 @@ import { supabase } from '../../supabase'
 import toast from 'react-hot-toast'
 import { formatLKR, timeAgo } from '../../lib/repairConstants'
 import { generateRepairPurchaseNo, generateRepairSupplierNo } from '../../lib/repairHelpers'
-import { PartModal } from './RepairInventory'
+import { PartPicker, PartModal } from './RepairInventory'
 import RepairPurchaseReturns from './RepairPurchaseReturns'
 
 export default function RepairPurchases({ shop }) {
@@ -33,6 +33,7 @@ export default function RepairPurchases({ shop }) {
     setViewItems(data || [])
     setViewing(p)
   }
+  const [viewingSupplierTxn, setViewingSupplierTxn] = useState(null)
 
   return (
     <div>
@@ -99,6 +100,7 @@ export default function RepairPurchases({ shop }) {
 
       {showNew && <NewPurchaseModal shop={shop} suppliers={suppliers} onClose={() => setShowNew(false)} onCreated={() => { setShowNew(false); fetchAll() }} onSuppliersChanged={fetchAll} />}
       {viewing && <ViewPurchaseModal purchase={viewing} items={viewItems} onClose={() => setViewing(null)} />}
+      {viewingSupplierTxn && <SupplierTransactionDetailModal event={viewingSupplierTxn} onClose={() => setViewingSupplierTxn(null)} />}
       {voidingPurchase && <VoidPurchaseModal shop={shop} purchase={voidingPurchase} onClose={() => setVoidingPurchase(null)} onVoided={() => { setVoidingPurchase(null); fetchAll() }} />}
     </div>
   )
@@ -191,11 +193,11 @@ function SupplierList({ shop, suppliers, onChanged }) {
     }
     ;(purchases || []).forEach(p => events.push({
       date: p.created_at, type: 'purchase', label: `Purchase ${p.purchase_no}`,
-      debit: p.total, credit: p.initial_payment || 0, ref: p.purchase_no,
+      debit: p.total, credit: p.initial_payment || 0, ref: p.purchase_no, source: p, kind: 'real_purchase',
     }))
     ;(returns || []).forEach(r => events.push({
       date: r.created_at, type: 'return', label: `Return ${r.return_no}`,
-      debit: 0, credit: r.total, ref: r.return_no,
+      debit: 0, credit: r.total, ref: r.return_no, source: r,
     }))
     ;(thirdPartyItems || []).forEach(t => {
       const lineTotal = (t.cost_price || 0) * (t.quantity || 1)
@@ -203,26 +205,26 @@ function SupplierList({ shop, suppliers, onChanged }) {
       events.push({
         date: t.created_at, type: 'purchase',
         label: `3rd-party item — ${t.item_name}${ref ? ` (${ref})` : ''}`,
-        debit: lineTotal, credit: 0, ref,
+        debit: lineTotal, credit: 0, ref, source: t, kind: 'third_party',
       })
       if (t.payment_status === 'paid' && t.paid_at) {
         events.push({
           date: t.paid_at, type: 'payment',
           label: `Settled (${t.payment_method || 'unknown'}) — ${t.item_name}`,
-          debit: 0, credit: lineTotal, ref,
+          debit: 0, credit: lineTotal, ref, source: t, kind: 'third_party',
         })
       }
     })
     ;(payments || []).forEach(pay => {
       events.push({
         date: pay.created_at, type: 'payment', label: `Payment (${pay.payment_method}${pay.bank_accounts?.name ? ' — ' + pay.bank_accounts.name : ''})`,
-        debit: 0, credit: pay.amount, ref: pay.reference,
+        debit: 0, credit: pay.amount, ref: pay.reference, source: pay,
       })
       if (pay.cheque_status === 'returned') {
         events.push({
           date: pay.returned_at || pay.created_at, type: 'reversal',
           label: 'Cheque returned/bounced — payment reversed',
-          debit: pay.amount, credit: 0, ref: pay.reference,
+          debit: pay.amount, credit: 0, ref: pay.reference, source: pay,
         })
       }
     })
@@ -311,15 +313,26 @@ function SupplierList({ shop, suppliers, onChanged }) {
                   {['Date', 'Description', 'Debit', 'Credit', 'Balance'].map(h => <th key={h} style={{ padding: '6px 8px', textAlign: 'left', fontSize: '10px', color: '#a89478', textTransform: 'uppercase' }}>{h}</th>)}
                 </tr></thead>
                 <tbody>
-                  {statement.map((e, i) => (
-                    <tr key={i} style={{ borderBottom: '1px solid #f8f5f0' }}>
-                      <td style={{ padding: '7px 8px', color: '#78716c' }}>{timeAgo(e.date)}</td>
-                      <td style={{ padding: '7px 8px', fontWeight: '600' }}>{e.label}</td>
-                      <td style={{ padding: '7px 8px', color: '#e11d48' }}>{e.debit > 0 ? formatLKR(e.debit) : '—'}</td>
-                      <td style={{ padding: '7px 8px', color: '#059669' }}>{e.credit > 0 ? formatLKR(e.credit) : '—'}</td>
-                      <td style={{ padding: '7px 8px', fontWeight: '700' }}>{formatLKR(e.balance)}</td>
-                    </tr>
-                  ))}
+                  {statement.map((e, i) => {
+                    const clickable = !!e.source
+                    function handleClick() {
+                      if (!clickable) return
+                      if (e.type === 'purchase' && e.kind === 'real_purchase') viewPurchase(e.source)
+                      else setViewingSupplierTxn(e)
+                    }
+                    return (
+                      <tr key={i} onClick={handleClick}
+                        style={{ borderBottom: '1px solid #f8f5f0', cursor: clickable ? 'pointer' : 'default' }}
+                        onMouseEnter={ev => clickable && (ev.currentTarget.style.background = '#fdf8f3')}
+                        onMouseLeave={ev => clickable && (ev.currentTarget.style.background = 'white')}>
+                        <td style={{ padding: '7px 8px', color: '#78716c' }}>{timeAgo(e.date)}</td>
+                        <td style={{ padding: '7px 8px', fontWeight: '600' }}>{e.label}</td>
+                        <td style={{ padding: '7px 8px', color: '#e11d48' }}>{e.debit > 0 ? formatLKR(e.debit) : '—'}</td>
+                        <td style={{ padding: '7px 8px', color: '#059669' }}>{e.credit > 0 ? formatLKR(e.credit) : '—'}</td>
+                        <td style={{ padding: '7px 8px', fontWeight: '700' }}>{formatLKR(e.balance)}</td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             )}
@@ -540,8 +553,20 @@ function NewPurchaseModal({ shop, suppliers, onClose, onCreated, onSuppliersChan
   useEffect(() => { fetchParts() }, [])
   useEffect(() => { supabase.from('bank_accounts').select('*').order('name').then(({ data }) => setBankAccounts(data || [])) }, [])
 
-  function fetchParts() {
-    supabase.from('repair_parts').select('id, name, purchase_price').order('name').then(({ data }) => setParts(data || []))
+  // A plain .select() caps at Supabase's default 1000-row limit — with a
+  // large enough parts catalog, some parts silently never show up in the
+  // picker, with no error to indicate anything was cut off.
+  async function fetchParts() {
+    let all = []
+    let from = 0
+    const PAGE_SIZE = 1000
+    while (true) {
+      const { data } = await supabase.from('repair_parts').select('id, name, sku, purchase_price, average_cost, current_stock').order('name').range(from, from + PAGE_SIZE - 1)
+      all = all.concat(data || [])
+      if (!data || data.length < PAGE_SIZE) break
+      from += PAGE_SIZE
+    }
+    setParts(all)
   }
 
   const subtotal = rows.reduce((s, r) => s + (parseFloat(r.quantity) || 0) * (parseFloat(r.unit_cost) || 0), 0)
@@ -641,12 +666,19 @@ function NewPurchaseModal({ shop, suppliers, onClose, onCreated, onSuppliersChan
         </div>
 
         <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Parts</label>
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.7fr 1fr auto', gap: '8px', marginTop: '8px', marginBottom: '2px' }}>
+          <span style={{ fontSize: '10px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Part</span>
+          <span style={{ fontSize: '10px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Qty</span>
+          <span style={{ fontSize: '10px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Unit Cost</span>
+          <span></span>
+        </div>
         {rows.map((r, i) => (
           <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 0.7fr 1fr auto', gap: '8px', marginBottom: '8px', marginTop: '6px' }}>
-            <select style={inp} value={r.part_id} onChange={e => updateRow(i, 'part_id', e.target.value)}>
-              <option value="">Select part...</option>
-              {parts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+            <PartPicker shop={shop} parts={parts} value={r.part_id}
+              onChange={(id, p) => {
+                setRows(rs => rs.map((row, idx) => idx !== i ? row : { ...row, part_id: id, unit_cost: p ? String(p.average_cost || p.purchase_price || '') : row.unit_cost }))
+                if (p && !parts.some(pp => pp.id === p.id)) setParts(ps => [...ps, p])
+              }} />
             <input type="number" style={inp} placeholder="Qty" value={r.quantity} onChange={e => updateRow(i, 'quantity', e.target.value)} />
             <input type="number" style={inp} placeholder="Unit Cost" value={r.unit_cost} onChange={e => updateRow(i, 'unit_cost', e.target.value)} />
             <button onClick={() => removeRow(i)} style={{ background: '#fee2e2', border: 'none', borderRadius: '7px', color: '#e11d48', cursor: 'pointer', padding: '0 10px' }}>✕</button>
@@ -720,6 +752,81 @@ function ViewPurchaseModal({ purchase, items, onClose }) {
       </div>
     </div>
   )
+}
+
+// Handles everything in the supplier ledger except real purchases (which
+// reuse the existing viewPurchase/ViewPurchaseModal directly): standalone
+// payments, 3rd-party items, and purchase returns.
+function SupplierTransactionDetailModal({ event, onClose }) {
+  const [returnItems, setReturnItems] = useState(null)
+
+  useEffect(() => {
+    if (event.type === 'return') {
+      supabase.from('repair_purchase_return_items').select('*, repair_parts(name)').eq('return_id', event.source.id).then(({ data }) => setReturnItems(data || []))
+    }
+  }, [event])
+
+  const s = event.source
+  const wrap = (title, color, body) => (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: '18px', padding: '26px', width: '100%', maxWidth: '440px', maxHeight: '80vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+          <h3 style={{ fontSize: '17px', fontWeight: '800', margin: 0, color }}>{title}</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: '#a89478' }}>✕</button>
+        </div>
+        {body}
+      </div>
+    </div>
+  )
+
+  if (event.kind === 'third_party') {
+    const lineTotal = (s.cost_price || 0) * (s.quantity || 1)
+    return wrap(s.item_name, '#d4881f', (
+      <>
+        <p style={{ fontSize: '13px', color: '#8a7a63', margin: '0 0 16px' }}>{timeAgo(s.created_at)} · {s.repair_jobs?.job_no || s.repair_sales?.sale_no || 'Not linked to a job/sale'}</p>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '8px' }}><span>Quantity</span><span>{s.quantity}</span></div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '8px' }}><span>Cost Price</span><span>{formatLKR(s.cost_price)}</span></div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '15px', fontWeight: '800' }}><span>Total Cost</span><span>{formatLKR(lineTotal)}</span></div>
+        <div style={{ marginTop: '10px', fontSize: '12px', color: s.payment_status === 'paid' ? '#059669' : '#e11d48', fontWeight: '700', textTransform: 'capitalize' }}>{s.payment_status}{s.payment_status === 'paid' ? ` (${s.payment_method})` : ''}</div>
+      </>
+    ))
+  }
+
+  if (event.type === 'payment' || event.type === 'reversal') {
+    return wrap(event.type === 'reversal' ? 'Cheque Returned' : 'Payment', event.type === 'reversal' ? '#e11d48' : '#059669', (
+      <>
+        <p style={{ fontSize: '13px', color: '#8a7a63', margin: '0 0 16px' }}>{timeAgo(s.created_at)}</p>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '8px' }}><span>Amount</span><span style={{ fontWeight: '800' }}>{formatLKR(s.amount)}</span></div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '8px', textTransform: 'capitalize' }}><span>Method</span><span>{s.payment_method}</span></div>
+        {s.bank_accounts?.name && <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '8px' }}><span>Account</span><span>{s.bank_accounts.name}</span></div>}
+        {s.reference && <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '8px' }}><span>Reference</span><span>{s.reference}</span></div>}
+        {s.cheque_status === 'returned' && <div style={{ marginTop: '8px', fontSize: '12px', color: '#e11d48', fontWeight: '700' }}>Cheque returned/bounced</div>}
+      </>
+    ))
+  }
+
+  if (event.type === 'return') {
+    return wrap(`Return ${s.return_no}`, '#e11d48', (
+      <>
+        <p style={{ fontSize: '13px', color: '#8a7a63', margin: '0 0 4px' }}>{timeAgo(s.created_at)} · {s.payment_method}</p>
+        {s.remarks && <p style={{ fontSize: '13px', color: '#78716c', margin: '0 0 14px' }}>{s.remarks}</p>}
+        {returnItems === null ? <div style={{ fontSize: '13px', color: '#a89478' }}>Loading...</div> : (
+          <div style={{ borderTop: '1px solid #f3ede4', borderBottom: '1px solid #f3ede4', padding: '8px 0', marginBottom: '10px' }}>
+            {returnItems.map(it => (
+              <div key={it.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: '13px' }}>
+                <span>{it.repair_parts?.name || 'Part'} × {it.quantity}</span>
+                <span style={{ fontWeight: '700' }}>{formatLKR(it.line_total)}</span>
+              </div>
+            ))}
+            {returnItems.length === 0 && <div style={{ fontSize: '12px', color: '#a89478' }}>No items on record.</div>}
+          </div>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '15px', fontWeight: '800' }}><span>Total Refund</span><span>{formatLKR(s.total)}</span></div>
+      </>
+    ))
+  }
+
+  return null
 }
 
 // Voiding a purchase means it should never have happened — undo it precisely

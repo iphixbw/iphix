@@ -727,6 +727,14 @@ function CollectPaymentModal({ job, balanceDue, onClose, onCollected }) {
         job_id: job.id, amount: amt, payment_method: method,
         bank_account_id: (method === 'card' || method === 'bank_transfer') ? bankAccountId : null,
       })
+      // Every other payment flow in this app immediately syncs the
+      // customer's aggregate outstanding_balance — this one didn't, meaning
+      // it stayed stale (too high) until the customer's own page was next
+      // opened and self-healed it. Fixed here for correctness, and because
+      // an accurate printed balance depends on it being right immediately.
+      if (job.customer_id) {
+        await supabase.rpc('repair_adjust_customer_balance', { p_customer_id: job.customer_id, p_delta: -amt })
+      }
       if (method === 'cash') {
         await supabase.from('repair_cash_ledger').insert({ shop_id: job.shop_id, type: 'sale', amount: amt, reference: job.job_no, notes: 'Repair job payment collected' })
       } else {
