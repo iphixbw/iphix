@@ -9,33 +9,74 @@ export default function RepairExpenses({ shop }) {
   const [expenses, setExpenses] = useState([])
   const [loading, setLoading] = useState(true)
   const [showNew, setShowNew] = useState(false)
+  const monthStartStr = (() => { const d = new Date(); d.setDate(1); return d.toISOString().slice(0, 10) })()
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const [fromDate, setFromDate] = useState(monthStartStr)
+  const [toDate, setToDate] = useState(todayStr)
 
-  useEffect(() => { fetchExpenses() }, [shop?.id])
+  useEffect(() => { fetchExpenses() }, [shop?.id, fromDate, toDate])
 
   async function fetchExpenses() {
     setLoading(true)
     let q = supabase.from('repair_expenses').select('*').order('created_at', { ascending: false })
     if (shop?.id) q = q.eq('shop_id', shop.id)
+    if (fromDate) q = q.gte('created_at', fromDate + 'T00:00:00')
+    if (toDate) q = q.lte('created_at', toDate + 'T23:59:59.999')
     const { data } = await q
     setExpenses(data || [])
     setLoading(false)
   }
 
-  const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
-  const monthTotal = expenses.filter(e => new Date(e.created_at) >= monthStart).reduce((s, e) => s + e.amount, 0)
+  // expenses is already filtered to [fromDate, toDate] at the query level, so
+  // this total and the category breakdown below both reflect the selected
+  // period, not a hardcoded "current month" — that stale concept is what
+  // used to live here.
+  const periodTotal = expenses.reduce((s, e) => s + (e.amount || 0), 0)
+  const byCategory = {}
+  expenses.forEach(e => { const c = e.category || 'Uncategorized'; byCategory[c] = (byCategory[c] || 0) + (e.amount || 0) })
+  const categoryTotals = Object.entries(byCategory).sort((a, b) => b[1] - a[1])
 
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
         <div>
           <h1 style={{ fontSize: '22px', fontWeight: '800', color: '#1c1917', margin: '0 0 4px' }}>Repair Expenses</h1>
-          <p style={{ color: '#8a7a63', fontSize: '14px', margin: 0 }}>This month: <strong style={{ color: '#e11d48' }}>{formatLKR(monthTotal)}</strong></p>
+          <p style={{ color: '#8a7a63', fontSize: '14px', margin: 0 }}>Total for period: <strong style={{ color: '#e11d48' }}>{formatLKR(periodTotal)}</strong></p>
         </div>
         <button onClick={() => setShowNew(true)}
           style={{ padding: '11px 22px', background: 'linear-gradient(135deg,#f0b23d,#d4881f)', color: '#1c1917', border: 'none', borderRadius: '12px', cursor: 'pointer', fontWeight: '800', fontSize: '14px' }}>
           + Add Expense
         </button>
       </div>
+
+      <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', marginBottom: '20px', flexWrap: 'wrap' }}>
+        <div>
+          <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>From</label>
+          <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} style={{ padding: '9px 12px', border: '1.5px solid #e7dfd3', borderRadius: '8px', fontSize: '13px' }} />
+        </div>
+        <div>
+          <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>To</label>
+          <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} style={{ padding: '9px 12px', border: '1.5px solid #e7dfd3', borderRadius: '8px', fontSize: '13px' }} />
+        </div>
+        <button onClick={() => { const d = new Date(); d.setDate(1); setFromDate(d.toISOString().slice(0, 10)); setToDate(todayStr) }}
+          style={{ padding: '9px 14px', background: '#fef3e2', color: '#d4881f', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: '700' }}>This Month</button>
+      </div>
+
+      {!loading && categoryTotals.length > 0 && (
+        <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #f3ede4', padding: '18px 20px', marginBottom: '20px', maxWidth: '420px' }}>
+          <div style={{ fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase', marginBottom: '10px' }}>By Category</div>
+          {categoryTotals.map(([cat, amt]) => (
+            <div key={cat} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: '13px', borderBottom: '1px solid #f8f5f0' }}>
+              <span style={{ fontWeight: '500' }}>{cat}</span>
+              <span style={{ fontWeight: '700', color: '#e11d48' }}>{formatLKR(amt)}</span>
+            </div>
+          ))}
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0 0', fontSize: '14px', borderTop: '2px solid #1c1917', marginTop: '4px' }}>
+            <span style={{ fontWeight: '800' }}>Total</span>
+            <span style={{ fontWeight: '800', color: '#e11d48' }}>{formatLKR(periodTotal)}</span>
+          </div>
+        </div>
+      )}
 
       {loading ? <div style={{ padding: '60px', textAlign: 'center', color: '#a89478' }}>Loading...</div> : (
         <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #f3ede4', overflow: 'hidden' }}>

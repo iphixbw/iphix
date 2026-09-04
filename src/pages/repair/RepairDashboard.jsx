@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../supabase'
+import toast from 'react-hot-toast'
 import { formatLKR, statusMeta, timeAgo, isCollectedWithDue } from '../../lib/repairConstants'
 
 export default function RepairDashboard({ shop, onOpenJob, navigateTo }) {
@@ -13,72 +14,91 @@ export default function RepairDashboard({ shop, onOpenJob, navigateTo }) {
 
   async function fetchDashboard() {
     setLoading(true)
-    const shopFilter = shop?.id ? (q) => q.eq('shop_id', shop.id) : (q) => q
+    try {
+      const shopFilter = shop?.id ? (q) => q.eq('shop_id', shop.id) : (q) => q
 
-    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
-    const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
+      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
+      const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
 
-    const [{ data: jobs }, { data: parts }, { data: expenses }] = await Promise.all([
-      shopFilter(supabase.from('repair_jobs').select('*, repair_customers(name, mobile)')).order('created_at', { ascending: false }),
-      shopFilter(supabase.from('repair_parts').select('*')),
-      shopFilter(supabase.from('repair_expenses').select('amount, created_at')),
-    ])
+      // repair_part_batches is embedded directly into this query (a server-side
+      // join) instead of being fetched separately with .in('part_id', partIds).
+      // With 2,000+ parts in the catalog, that second query was sending every
+      // single part ID back in one request's URL — occasionally producing a
+      // request so large it stalled or failed outright. A stuck request can also
+      // tie up one of the browser's limited concurrent connections to Supabase,
+      // which makes OTHER pages appear stuck too, since their requests queue
+      // behind it even though they're otherwise unrelated. This embedding scales
+      // to any catalog size without that risk.
+      const [{ data: jobs }, { data: parts }, { data: expenses }] = await Promise.all([
+        shopFilter(supabase.from('repair_jobs').select('*, repair_customers(name, mobile)')).order('created_at', { ascending: false }),
+        shopFilter(supabase.from('repair_parts').select('*, repair_part_batches(quantity_remaining, unit_cost)')),
+        shopFilter(supabase.from('repair_expenses').select('amount, created_at')),
+      ])
 
-    const allJobs = jobs || []
-    const todayJobs = allJobs.filter(j => new Date(j.created_at) >= todayStart)
-    const pending = allJobs.filter(j => !['collected', 'cancelled', 'returned_unrepaired'].includes(j.status))
-    const completed = allJobs.filter(j => j.status === 'collected')
-    const waitingParts = allJobs.filter(j => j.status === 'waiting_parts')
-    const ready = allJobs.filter(j => j.status === 'ready')
-    const inProgress = allJobs.filter(j => j.status === 'in_progress')
+      const allJobs = jobs || []
+      // Voided jobs never actually happened — same reasoning as excluding them from
+      // "pending" below applies to every other job-derived stat on this dashboard.
+      const activeJobs = allJobs.filter(j => j.status !== 'voided')
+      const activeJobIds = new Set(activeJobs.map(j => j.id))
+      const todayJobs = activeJobs.filter(j => new Date(j.created_at) >= todayStart)
+      const pending = allJobs.filter(j => !['collected', 'cancelled', 'returned_unrepaired', 'voided'].includes(j.status))
+      const completed = allJobs.filter(j => j.status === 'collected')
+      const waitingParts = allJobs.filter(j => j.status === 'waiting_parts')
+      const ready = allJobs.filter(j => j.status === 'ready')
+      const inProgress = allJobs.filter(j => j.status === 'in_progress')
 
-    const monthJobs = allJobs.filter(j => new Date(j.created_at) >= monthStart && j.status === 'collected')
-    const revenue = monthJobs.reduce((s, j) => s + (j.grand_total || 0), 0)
-    const cost = monthJobs.reduce((s, j) => s + (j.cost_total || 0), 0)
-    const monthExpenses = (expenses || []).filter(e => new Date(e.created_at) >= monthStart).reduce((s, e) => s + e.amount, 0)
-    const profit = revenue - cost - monthExpenses
+      const monthJobs = allJobs.filter(j => new Date(j.created_at) >= monthStart && j.status === 'collected')
+      const revenue = monthJobs.reduce((s, j) => s + (j.grand_total || 0), 0)
+      const cost = monthJobs.reduce((s, j) => s + (j.cost_total || 0), 0)
+      const monthExpenses = (expenses || []).filter(e => new Date(e.created_at) >= monthStart).reduce((s, e) => s + e.amount, 0)
+      const profit = revenue - cost - monthExpenses
 
-    // FIFO inventory value — sum remaining batch quantity × cost across all parts in scope
-    const partIds = (parts || []).map(p => p.id)
-    let inventoryValue = 0
-    if (partIds.length > 0) {
-      const { data: batches } = await supabase.from('repair_part_batches').select('part_id, quantity_remaining, unit_cost').in('part_id', partIds)
-      inventoryValue = (batches || []).reduce((s, b) => s + (b.quantity_remaining || 0) * (b.unit_cost || 0), 0)
+      // FIFO inventory value — computed from the batches embedded in the parts
+      // query above.
+      const inventoryValue = (parts || []).reduce((s, p) => s + (p.repair_part_batches || []).reduce((s2, b) => s2 + (b.quantity_remaining || 0) * (b.unit_cost || 0), 0), 0)
+      const lowStock = (parts || []).filter(p => (p.current_stock || 0) <= (p.min_stock || 0))
+
+      // Most common repairs (by reported_problem text) — voided jobs excluded, they never happened
+      const problemCounts = {}
+      activeJobs.forEach(j => {
+        const key = (j.reported_problem || 'Other').trim()
+        if (key) problemCounts[key] = (problemCounts[key] || 0) + 1
+      })
+      const topProblems = Object.entries(problemCounts).sort((a, b) => b[1] - a[1]).slice(0, 5)
+
+      // Top selling parts — from job_parts join. job_id is selected specifically so
+      // parts used on a voided job (which never actually happened) can be excluded,
+      // same reasoning as the other job-derived stats above.
+      const { data: jobParts } = await supabase
+        .from('repair_job_parts')
+        .select('quantity, part_id, job_id, repair_parts(name)')
+      const partCounts = {}
+      ;(jobParts || []).filter(jp => activeJobIds.has(jp.job_id)).forEach(jp => {
+        const name = jp.repair_parts?.name || 'Unknown'
+        partCounts[name] = (partCounts[name] || 0) + (jp.quantity || 0)
+      })
+      const topPartsList = Object.entries(partCounts).sort((a, b) => b[1] - a[1]).slice(0, 5)
+
+      setStats({
+        todayCount: todayJobs.length,
+        pendingCount: pending.length,
+        completedCount: completed.length,
+        waitingPartsCount: waitingParts.length,
+        readyCount: ready.length,
+        inProgressCount: inProgress.length,
+        revenue, cost: cost + monthExpenses, profit,
+        inventoryValue, lowStockCount: lowStock.length,
+      })
+      setRecentJobs(allJobs.slice(0, 8))
+      setCommonRepairs(topProblems)
+      setTopParts(topPartsList)
+    } catch (e) {
+      // Previously, any failure here (network blip, a slow/oversized query, etc.)
+      // left the dashboard stuck on "Loading..." forever, since setLoading(false)
+      // was only ever reached on the success path. Now a failure is visible and
+      // recoverable instead of silent and permanent.
+      toast.error('Dashboard failed to load: ' + e.message)
     }
-    const lowStock = (parts || []).filter(p => (p.current_stock || 0) <= (p.min_stock || 0))
-
-    // Most common repairs (by reported_problem text)
-    const problemCounts = {}
-    allJobs.forEach(j => {
-      const key = (j.reported_problem || 'Other').trim()
-      if (key) problemCounts[key] = (problemCounts[key] || 0) + 1
-    })
-    const topProblems = Object.entries(problemCounts).sort((a, b) => b[1] - a[1]).slice(0, 5)
-
-    // Top selling parts — from job_parts join
-    const { data: jobParts } = await supabase
-      .from('repair_job_parts')
-      .select('quantity, part_id, repair_parts(name)')
-    const partCounts = {}
-    ;(jobParts || []).forEach(jp => {
-      const name = jp.repair_parts?.name || 'Unknown'
-      partCounts[name] = (partCounts[name] || 0) + (jp.quantity || 0)
-    })
-    const topPartsList = Object.entries(partCounts).sort((a, b) => b[1] - a[1]).slice(0, 5)
-
-    setStats({
-      todayCount: todayJobs.length,
-      pendingCount: pending.length,
-      completedCount: completed.length,
-      waitingPartsCount: waitingParts.length,
-      readyCount: ready.length,
-      inProgressCount: inProgress.length,
-      revenue, cost: cost + monthExpenses, profit,
-      inventoryValue, lowStockCount: lowStock.length,
-    })
-    setRecentJobs(allJobs.slice(0, 8))
-    setCommonRepairs(topProblems)
-    setTopParts(topPartsList)
     setLoading(false)
   }
 
