@@ -3,7 +3,7 @@ import { supabase } from '../../supabase'
 import toast from 'react-hot-toast'
 import { formatLKR, timeAgo } from '../../lib/repairConstants'
 
-const CATEGORIES = ['Rent', 'Electricity', 'Internet', 'Technician Salaries', 'Cleaning', 'Tools', 'Fuel', 'Miscellaneous']
+const CATEGORIES = ['Rent', 'Electricity', 'Internet', 'Technician Salaries', 'Cleaning', 'Tools', 'Fuel', 'Tea/Mess', 'Donation', 'General Expenses', 'Staff Salary', 'Travelling', 'Stationary', 'Postage/Courier', 'Miscellaneous']
 
 export default function RepairExpenses({ shop }) {
   const [expenses, setExpenses] = useState([])
