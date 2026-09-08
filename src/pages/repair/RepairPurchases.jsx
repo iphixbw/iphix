@@ -47,7 +47,15 @@ export async function buildSupplierStatement(supplier) {
       label: `3rd-party item — ${t.item_name}${ref ? ` (${ref})` : ''}`,
       debit: lineTotal, credit: 0, ref, source: t, kind: 'third_party',
     })
-    if (t.payment_status === 'paid' && t.paid_at) {
+    // A "Settled" line here is only needed for items settled via "Mark as
+    // Paid" — that flow adjusts the supplier balance directly via RPC with
+    // no separate payment record anywhere else, so this line is the only
+    // place that money is ever credited. An item settled through a bulk
+    // supplier payment instead (payment_method 'bulk_settlement') already
+    // gets credited once via that payment's own line below — adding a
+    // second credit here for the same money is exactly what caused
+    // MOBILE HUB, MAX, and PU MOBILE's balances to be wrong.
+    if (t.payment_status === 'paid' && t.paid_at && t.payment_method !== 'bulk_settlement') {
       events.push({
         date: t.paid_at, type: 'payment',
         label: `Settled (${t.payment_method || 'unknown'}) — ${t.item_name}`,
@@ -82,7 +90,10 @@ export async function buildSupplierStatement(supplier) {
     pmts.push({ date: pay.created_at, label: `Payment (${pay.payment_method}${pay.bank_accounts?.name ? ' — ' + pay.bank_accounts.name : ''})`, amount: pay.amount })
   })
   ;(thirdPartyItems || []).forEach(t => {
-    if (t.payment_status === 'paid' && t.paid_at) {
+    // Same reasoning as the Activity Statement above — a bulk-settled item's
+    // money is already represented by the bulk payment's own line; showing
+    // it again here would double it in this list too.
+    if (t.payment_status === 'paid' && t.paid_at && t.payment_method !== 'bulk_settlement') {
       pmts.push({ date: t.paid_at, label: `Settled (${t.payment_method || 'unknown'}) — ${t.item_name}`, amount: (t.cost_price || 0) * (t.quantity || 1) })
     }
   })
@@ -234,7 +245,17 @@ function SupplierList({ shop, suppliers, onChanged, onOpenStatement }) {
 
     const [{ data: purchases }, { data: thirdPartyItems }, { data: returns }, { data: standaloneForCalc }] = await Promise.all([
       supabase.from('repair_purchases').select('total, initial_payment').eq('supplier_id', supplierRow.id),
-      supabase.from('repair_third_party_items').select('cost_price, quantity').eq('supplier_id', supplierRow.id).eq('payment_status', 'pending'),
+      // Pending items are real, unsettled debt. Items settled via a bulk
+      // payment ('bulk_settlement') are ALSO real debt that must stay
+      // counted here — the money for them is only credited once, via the
+      // standalone_payments term below, not by excluding the item itself.
+      // Only "Mark as Paid" settlements (any other payment_method on a paid
+      // item) are correctly excluded — that flow never creates a standalone
+      // payment record, so the item's cost and its payment cancel out by
+      // both being absent from this formula, with nothing else to balance
+      // against. Getting this wrong is exactly what made MOBILE HUB, MAX,
+      // and PU MOBILE's balances wrong.
+      supabase.from('repair_third_party_items').select('cost_price, quantity').eq('supplier_id', supplierRow.id).or('payment_status.eq.pending,payment_method.eq.bulk_settlement'),
       supabase.from('repair_purchase_returns').select('total').eq('supplier_id', supplierRow.id).neq('status', 'voided'),
       supabase.from('repair_supplier_standalone_payments').select('amount').eq('supplier_id', supplierRow.id),
     ])
@@ -550,8 +571,15 @@ function SupplierPaymentModal({ shop, supplier, onClose, onPaid }) {
           const t = entry.data
           const cost = (t.cost_price || 0) * (t.quantity || 1)
           if (cost <= 0.009 || remaining < cost - 0.009) continue
+          // Deliberately 'bulk_settlement' here, not the payment's actual
+          // method — this is the one thing that makes a bulk-settled item
+          // distinguishable from one settled via "Mark as Paid" (which uses
+          // the real cash/bank/cheque method and has no other payment
+          // record). The ledger and self-heal formula both rely on this tag
+          // to know not to credit this item's cost a second time on top of
+          // the standalone payment above, which already accounts for it.
           const { error: tpErr } = await supabase.from('repair_third_party_items').update({
-            payment_status: 'paid', payment_method: method, paid_at: new Date().toISOString(),
+            payment_status: 'paid', payment_method: 'bulk_settlement', paid_at: new Date().toISOString(),
           }).eq('id', t.id)
           if (tpErr) updateErrors.push(`${t.item_name}: ${tpErr.message}`)
           remaining -= cost
