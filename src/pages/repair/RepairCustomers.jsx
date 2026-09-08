@@ -4,7 +4,112 @@ import toast from 'react-hot-toast'
 import { formatLKR, statusMeta, timeAgo, isCollectedWithDue } from '../../lib/repairConstants'
 import { ViewSaleModal } from './RepairSales'
 
-export default function RepairCustomers({ shop, onOpenJob }) {
+// Shared with RepairCustomerStatement.jsx (the full-page view) so both places
+// use the exact same statement logic rather than two copies that could drift
+// apart. onBalanceHealed lets the caller decide what to do with a corrected
+// balance (e.g. update a list of customers already in memory) — this function
+// itself only recalculates and persists it.
+export async function buildCustomerStatement(c, { onBalanceHealed } = {}) {
+  const [{ data: j }, { data: s }] = await Promise.all([
+    supabase.from('repair_jobs').select('*').eq('customer_id', c.id).order('created_at', { ascending: true }),
+    supabase.from('repair_sales').select('*').eq('customer_id', c.id).order('created_at', { ascending: true }),
+  ])
+
+  const { data: creditReturns } = await supabase.from('repair_sale_returns').select('total').eq('customer_id', c.id).eq('payment_method', 'credit').neq('status', 'voided')
+  const { data: standaloneForCalc } = await supabase.from('repair_customer_standalone_payments').select('amount').eq('customer_id', c.id)
+
+  const trueBalance = (c.opening_balance || 0)
+    + (j || []).filter(job => job.status !== 'voided').reduce((s, job) => s + (job.balance_due || 0), 0)
+    + (s || []).reduce((sum, sale) => sum + Math.max(0, (sale.total || 0) - (sale.amount_paid || 0)), 0)
+    - (creditReturns || []).reduce((s, r) => s + (r.total || 0), 0)
+    - (standaloneForCalc || []).reduce((s, p) => s + (p.amount || 0), 0)
+  let fresh = c
+  if (trueBalance !== c.outstanding_balance) {
+    const { data: updated, error: healErr } = await supabase.from('repair_customers').update({ outstanding_balance: trueBalance }).eq('id', c.id).select().single()
+    if (healErr) {
+      toast.error('Balance recalculated but failed to save: ' + healErr.message)
+    } else if (updated) {
+      fresh = updated
+      onBalanceHealed?.(updated)
+    }
+  }
+
+  const jobIds = (j || []).map(job => job.id)
+  const saleIds = (s || []).map(sale => sale.id)
+  const [{ data: jobPayments }, { data: standalone }, { data: saleReturns }, { data: salePayments }] = await Promise.all([
+    jobIds.length ? supabase.from('repair_job_payments').select('*').in('job_id', jobIds) : Promise.resolve({ data: [] }),
+    supabase.from('repair_customer_standalone_payments').select('*, bank_accounts(name)').eq('customer_id', c.id),
+    supabase.from('repair_sale_returns').select('*').eq('customer_id', c.id).eq('payment_method', 'credit').neq('status', 'voided'),
+    saleIds.length ? supabase.from('repair_sale_payments').select('*').in('sale_id', saleIds) : Promise.resolve({ data: [] }),
+  ])
+
+  const events = []
+  const openingBal = fresh?.opening_balance ?? c.opening_balance
+  if (openingBal > 0) {
+    events.push({
+      date: fresh.created_at || new Date(0).toISOString(),
+      label: 'Opening balance brought forward', debit: openingBal, credit: 0, type: 'opening',
+    })
+  }
+  ;(j || []).forEach(job => {
+    events.push({ date: job.created_at, label: `Repair Job ${job.job_no} — ${job.phone_brand} ${job.phone_model}`, debit: job.grand_total || 0, credit: job.deposit_received || 0, type: 'job', source: job })
+  })
+  ;(jobPayments || []).forEach(jp => {
+    const job = (j || []).find(job => job.id === jp.job_id)
+    events.push({ date: jp.created_at, label: `Payment (${jp.payment_method}) — Job ${job?.job_no || ''}`, debit: 0, credit: jp.amount, type: 'payment', source: jp })
+  })
+  ;(s || []).forEach(sale => {
+    events.push({ date: sale.created_at, label: `Parts Sale ${sale.sale_no}`, debit: sale.total || 0, credit: sale.amount_paid || 0, type: 'sale', source: { ...sale, repair_customers: { name: fresh?.name || c.name } } })
+  })
+  ;(standalone || []).forEach(sp => {
+    events.push({ date: sp.created_at, label: `Payment (${sp.payment_method}${sp.bank_accounts?.name ? ' — ' + sp.bank_accounts.name : ''})`, debit: 0, credit: sp.amount, type: 'payment', source: sp })
+  })
+  ;(saleReturns || []).forEach(r => {
+    events.push({ date: r.created_at, label: `Return ${r.return_no}`, debit: 0, credit: r.total, type: 'return', source: r })
+  })
+  events.sort((a, b) => new Date(a.date) - new Date(b.date))
+  let running = 0
+  events.forEach(e => { running += e.debit - e.credit; e.balance = running })
+
+  // A genuinely complete payment history — deliberately built as its OWN list
+  // rather than folded into `events` above. Job deposits and the amount paid
+  // at sale creation are already counted inside the 'job'/'sale' entries'
+  // credit field for the running balance, so adding them again here as
+  // separate line items would double-count and corrupt that balance. This
+  // list is purely informational (no balance column), so it's safe for it to
+  // include every actual money-received event, however it was recorded.
+  const payments = []
+  ;(j || []).forEach(job => {
+    if ((job.deposit_received || 0) > 0) {
+      payments.push({ date: job.created_at, label: `Deposit — Job ${job.job_no}`, amount: job.deposit_received, source: job })
+    }
+  })
+  ;(jobPayments || []).forEach(jp => {
+    const job = (j || []).find(job => job.id === jp.job_id)
+    payments.push({ date: jp.created_at, label: `Payment (${jp.payment_method}) — Job ${job?.job_no || ''}`, amount: jp.amount, source: jp })
+  })
+  ;(s || []).forEach(sale => {
+    if ((sale.amount_paid || 0) > 0 && !(salePayments || []).some(sp => sp.sale_id === sale.id)) {
+      // Fallback for a sale whose payment predates repair_sale_payments being
+      // logged, or where amount_paid was set without a matching log row —
+      // without this, that payment would silently disappear from history
+      // entirely instead of just lacking payment-method detail.
+      payments.push({ date: sale.created_at, label: `Payment — Sale ${sale.sale_no}`, amount: sale.amount_paid, source: sale })
+    }
+  })
+  ;(salePayments || []).forEach(sp => {
+    const sale = (s || []).find(sale => sale.id === sp.sale_id)
+    payments.push({ date: sp.created_at, label: `Payment (${sp.payment_method}) — Sale ${sale?.sale_no || ''}`, amount: sp.amount, source: sp })
+  })
+  ;(standalone || []).forEach(sp => {
+    payments.push({ date: sp.created_at, label: `Payment (${sp.payment_method}${sp.bank_accounts?.name ? ' — ' + sp.bank_accounts.name : ''})`, amount: sp.amount, source: sp })
+  })
+  payments.sort((a, b) => new Date(a.date) - new Date(b.date))
+
+  return { jobs: j || [], sales: s || [], statement: events, customer: fresh, payments }
+}
+
+export default function RepairCustomers({ shop, onOpenJob, onOpenStatement }) {
   const [customers, setCustomers] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -12,6 +117,7 @@ export default function RepairCustomers({ shop, onOpenJob }) {
   const [jobs, setJobs] = useState([])
   const [sales, setSales] = useState([])
   const [statement, setStatement] = useState([])
+  const [payments, setPayments] = useState([])
   const [viewingTxn, setViewingTxn] = useState(null)
   const [detailTab, setDetailTab] = useState('statement')
   const [showReceivePayment, setShowReceivePayment] = useState(false)
@@ -28,94 +134,13 @@ export default function RepairCustomers({ shop, onOpenJob }) {
   async function openCustomer(c) {
     setSelected(c)
     setDetailTab('statement')
-    const [{ data: j }, { data: s }] = await Promise.all([
-      supabase.from('repair_jobs').select('*').eq('customer_id', c.id).order('created_at', { ascending: false }),
-      supabase.from('repair_sales').select('*').eq('customer_id', c.id).order('created_at', { ascending: false }),
-    ])
-    setJobs(j || [])
-    setSales(s || [])
-
-    const { data: creditReturns } = await supabase.from('repair_sale_returns').select('total').eq('customer_id', c.id).eq('payment_method', 'credit').neq('status', 'voided')
-    const { data: standaloneForCalc } = await supabase.from('repair_customer_standalone_payments').select('amount').eq('customer_id', c.id)
-
-    // outstanding_balance is normally kept in sync incrementally (payments,
-    // credit sales), but that only works if EVERY code path that changes what
-    // a customer owes remembers to call the adjust RPC — job creation and job
-    // cost edits didn't, so some customers' stored balance had quietly drifted
-    // from reality with nothing to catch it. Recalculating from scratch here,
-    // the same way job balances and FIFO stock values already self-heal on
-    // open, makes this resilient to any gap like that, present or future.
-    // Only CREDIT-method returns affect the balance — cash/bank refunds are a
-    // pure money movement, same convention as everywhere else this matters.
-    // Standalone payments must be included here too — jobs/sales already
-    // reflect their own direct payments live (balance_due / amount_paid), but
-    // opening_balance is a static field with nothing else to net a standalone
-    // (unallocated) payment against, so leaving this out is exactly what
-    // caused the header to silently ignore every standalone payment ever made.
-    // Combined Accounts settlements are NOT a separate term here — they're
-    // applied via the exact same job_payments/sale_payments/standalone_payments
-    // records a normal payment would create (see RepairCombinedAccounts.jsx),
-    // so they're already fully accounted for by the terms above. Adding them
-    // again as their own subtraction would double-count every settlement.
-    const trueBalance = (c.opening_balance || 0)
-      + (j || []).filter(job => job.status !== 'voided').reduce((s, job) => s + (job.balance_due || 0), 0)
-      + (s || []).reduce((sum, sale) => sum + Math.max(0, (sale.total || 0) - (sale.amount_paid || 0)), 0)
-      - (creditReturns || []).reduce((s, r) => s + (r.total || 0), 0)
-      - (standaloneForCalc || []).reduce((s, p) => s + (p.amount || 0), 0)
-    let fresh = c
-    if (trueBalance !== c.outstanding_balance) {
-      const { data: updated, error: healErr } = await supabase.from('repair_customers').update({ outstanding_balance: trueBalance }).eq('id', c.id).select().single()
-      if (healErr) {
-        toast.error('Balance recalculated but failed to save: ' + healErr.message)
-      } else if (updated) {
-        fresh = updated; setSelected(updated); setCustomers(cs => cs.map(cc => cc.id === updated.id ? updated : cc))
-      }
-    }
-
-    const jobIds = (j || []).map(job => job.id)
-    const [{ data: jobPayments }, { data: standalone }, { data: saleReturns }] = await Promise.all([
-      jobIds.length ? supabase.from('repair_job_payments').select('*').in('job_id', jobIds) : Promise.resolve({ data: [] }),
-      supabase.from('repair_customer_standalone_payments').select('*, bank_accounts(name)').eq('customer_id', c.id),
-      // Only credit-method returns show here — cash/bank refunds don't touch
-      // the balance, so including them would make this ledger's own running
-      // total diverge from what's actually stored, recreating the exact bug
-      // this self-heal exists to prevent.
-      supabase.from('repair_sale_returns').select('*').eq('customer_id', c.id).eq('payment_method', 'credit').neq('status', 'voided'),
-    ])
-
-    // Build a chronological activity statement across jobs + sales + their payments
-    const events = []
-    const openingBal = fresh?.opening_balance ?? c.opening_balance
-    if (openingBal > 0) {
-      events.push({
-        date: fresh.created_at || new Date(0).toISOString(),
-        label: 'Opening balance brought forward', debit: openingBal, credit: 0, type: 'opening',
-      })
-    }
-    ;(j || []).forEach(job => {
-      // deposit_received is frozen at job creation — anything paid afterward
-      // (Collect Payment on the job itself, or a customer-level payment
-      // applied here) goes through repair_job_payments instead, shown below
-      // as its own line, so this never double-counts with those.
-      events.push({ date: job.created_at, label: `Repair Job ${job.job_no} — ${job.phone_brand} ${job.phone_model}`, debit: job.grand_total || 0, credit: job.deposit_received || 0, type: 'job', source: job })
+    const { jobs: j, sales: s, statement, customer: fresh, payments: pmts } = await buildCustomerStatement(c, {
+      onBalanceHealed: (updated) => { setSelected(updated); setCustomers(cs => cs.map(cc => cc.id === updated.id ? updated : cc)) },
     })
-    ;(jobPayments || []).forEach(jp => {
-      const job = (j || []).find(job => job.id === jp.job_id)
-      events.push({ date: jp.created_at, label: `Payment (${jp.payment_method}) — Job ${job?.job_no || ''}`, debit: 0, credit: jp.amount, type: 'payment', source: jp })
-    })
-    ;(s || []).forEach(sale => {
-      events.push({ date: sale.created_at, label: `Parts Sale ${sale.sale_no}`, debit: sale.total || 0, credit: sale.amount_paid || 0, type: 'sale', source: { ...sale, repair_customers: { name: fresh?.name || c.name } } })
-    })
-    ;(standalone || []).forEach(sp => {
-      events.push({ date: sp.created_at, label: `Payment (${sp.payment_method}${sp.bank_accounts?.name ? ' — ' + sp.bank_accounts.name : ''})`, debit: 0, credit: sp.amount, type: 'payment', source: sp })
-    })
-    ;(saleReturns || []).forEach(r => {
-      events.push({ date: r.created_at, label: `Return ${r.return_no}`, debit: 0, credit: r.total, type: 'return', source: r })
-    })
-    events.sort((a, b) => new Date(a.date) - new Date(b.date))
-    let running = 0
-    events.forEach(e => { running += e.debit - e.credit; e.balance = running })
-    setStatement(events)
+    setJobs(j)
+    setSales(s)
+    setStatement(statement)
+    setPayments(pmts)
   }
 
   const filtered = customers.filter(c =>
@@ -206,13 +231,19 @@ export default function RepairCustomers({ shop, onOpenJob }) {
               </button>
             )}
 
-            <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
-              {[{ id: 'statement', label: 'Activity Statement' }, { id: 'jobs', label: `Repair Jobs (${jobs.length})` }, { id: 'sales', label: `Parts Sales (${sales.length})` }].map(t => (
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
+              {[{ id: 'statement', label: 'Activity Statement' }, { id: 'payments', label: `Payments (${payments.length})` }, { id: 'jobs', label: `Repair Jobs (${jobs.length})` }, { id: 'sales', label: `Parts Sales (${sales.length})` }].map(t => (
                 <button key={t.id} onClick={() => setDetailTab(t.id)}
                   style={{ padding: '6px 14px', borderRadius: '8px', border: 'none', background: detailTab === t.id ? '#1c1917' : '#f5f1ea', color: detailTab === t.id ? '#f0b23d' : '#78716c', fontWeight: '700', fontSize: '12px', cursor: 'pointer' }}>
                   {t.label}
                 </button>
               ))}
+              {detailTab === 'statement' && onOpenStatement && (
+                <button onClick={() => onOpenStatement(selected.id)}
+                  style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid #e7dfd3', background: 'white', color: '#d4881f', fontWeight: '700', fontSize: '12px', cursor: 'pointer', marginLeft: 'auto' }}>
+                  Open Full Statement ↗
+                </button>
+              )}
             </div>
 
             {detailTab === 'statement' && (
@@ -237,6 +268,25 @@ export default function RepairCustomers({ shop, onOpenJob }) {
                         </tr>
                       )
                     })}
+                  </tbody>
+                </table>
+              )
+            )}
+
+            {detailTab === 'payments' && (
+              payments.length === 0 ? <div style={{ fontSize: '13px', color: '#a89478' }}>No payments recorded yet.</div> : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
+                  <thead><tr style={{ borderBottom: '1px solid #f3ede4' }}>
+                    {['Date', 'Description', 'Amount'].map(h => <th key={h} style={{ padding: '6px 8px', textAlign: h === 'Amount' ? 'right' : 'left', fontSize: '10px', color: '#a89478', textTransform: 'uppercase' }}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {payments.map((p, i) => (
+                      <tr key={i} style={{ borderBottom: '1px solid #f8f5f0' }}>
+                        <td style={{ padding: '7px 8px', color: '#78716c' }}>{timeAgo(p.date)}</td>
+                        <td style={{ padding: '7px 8px', fontWeight: '600' }}>{p.label}</td>
+                        <td style={{ padding: '7px 8px', textAlign: 'right', color: '#059669', fontWeight: '700' }}>{formatLKR(p.amount)}</td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               )

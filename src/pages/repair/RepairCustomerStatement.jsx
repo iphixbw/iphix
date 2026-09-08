@@ -1,0 +1,123 @@
+import { useState, useEffect } from 'react'
+import { supabase } from '../../supabase'
+import { formatLKR, timeAgo } from '../../lib/repairConstants'
+import { buildCustomerStatement } from './RepairCustomers'
+
+// Full-page version of the Activity Statement tab in the Customers modal —
+// same underlying data and logic (via the shared buildCustomerStatement), just
+// with a whole page to work with instead of a capped-height modal. Built for
+// customers with enough history that the modal's internal scroll made it easy
+// to miss the most recent entries at the bottom.
+export default function RepairCustomerStatement({ customerId, onBack }) {
+  const [customer, setCustomer] = useState(null)
+  const [statement, setStatement] = useState([])
+  const [payments, setPayments] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [tab, setTab] = useState('statement')
+
+  useEffect(() => { load() }, [customerId])
+
+  async function load() {
+    setLoading(true)
+    const { data: c } = await supabase.from('repair_customers').select('*').eq('id', customerId).single()
+    if (!c) { setLoading(false); return }
+    const { statement: st, customer: fresh, payments: pmts } = await buildCustomerStatement(c)
+    setCustomer(fresh)
+    setStatement(st)
+    setPayments(pmts)
+    setLoading(false)
+  }
+
+  if (loading) return <div style={{ padding: '60px', textAlign: 'center', color: '#a89478' }}>Loading statement...</div>
+  if (!customer) return (
+    <div>
+      <button onClick={onBack} style={{ background: 'none', border: 'none', color: '#d4881f', fontWeight: '700', fontSize: '13px', cursor: 'pointer', marginBottom: '14px', padding: 0 }}>← Back to Customers</button>
+      <div style={{ padding: '48px', textAlign: 'center', color: '#a89478' }}>Customer not found.</div>
+    </div>
+  )
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ background: 'none', border: 'none', color: '#d4881f', fontWeight: '700', fontSize: '13px', cursor: 'pointer', marginBottom: '14px', padding: 0 }}>← Back to Customers</button>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <h1 style={{ fontSize: '22px', fontWeight: '800', color: '#1c1917', margin: '0 0 4px' }}>{customer.name}</h1>
+          <p style={{ color: '#8a7a63', fontSize: '13px', margin: 0 }}>{customer.mobile}{customer.customer_no ? ` · ${customer.customer_no}` : ''}</p>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>
+            {customer.outstanding_balance < 0 ? 'Credit Balance' : 'Outstanding Balance'}
+          </div>
+          <div style={{ fontSize: '24px', fontWeight: '800', color: customer.outstanding_balance > 0 ? '#e11d48' : customer.outstanding_balance < 0 ? '#059669' : '#1c1917' }}>
+            {formatLKR(Math.abs(customer.outstanding_balance || 0))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
+        {[{ id: 'statement', label: 'Activity Statement' }, { id: 'payments', label: `Payments (${payments.length})` }].map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            style={{ padding: '6px 14px', borderRadius: '8px', border: 'none', background: tab === t.id ? '#1c1917' : '#f5f1ea', color: tab === t.id ? '#f0b23d' : '#78716c', fontWeight: '700', fontSize: '12px', cursor: 'pointer' }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #f3ede4', overflow: 'hidden' }}>
+        {tab === 'statement' ? (
+          statement.length === 0 ? (
+            <div style={{ padding: '48px', textAlign: 'center', color: '#a89478', fontSize: '13px' }}>No activity yet.</div>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #f3ede4', background: '#fdf8f3' }}>
+                  {['Date', 'Description', 'Charged', 'Paid', 'Balance'].map(h => (
+                    <th key={h} style={{ padding: '10px 14px', textAlign: h === 'Description' ? 'left' : 'right', fontSize: '10px', color: '#a89478', textTransform: 'uppercase' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {statement.map((e, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid #f8f5f0' }}>
+                    <td style={{ padding: '10px 14px', color: '#78716c', whiteSpace: 'nowrap' }}>{timeAgo(e.date)}</td>
+                    <td style={{ padding: '10px 14px', fontWeight: '600' }}>{e.label}</td>
+                    <td style={{ padding: '10px 14px', textAlign: 'right', color: '#e11d48' }}>{e.debit > 0 ? formatLKR(e.debit) : '—'}</td>
+                    <td style={{ padding: '10px 14px', textAlign: 'right', color: '#059669' }}>{e.credit > 0 ? formatLKR(e.credit) : '—'}</td>
+                    <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: '700' }}>{formatLKR(e.balance)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )
+        ) : (
+          payments.length === 0 ? (
+            <div style={{ padding: '48px', textAlign: 'center', color: '#a89478', fontSize: '13px' }}>No payments recorded yet.</div>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #f3ede4', background: '#fdf8f3' }}>
+                  {['Date', 'Description', 'Amount'].map(h => (
+                    <th key={h} style={{ padding: '10px 14px', textAlign: h === 'Amount' ? 'right' : 'left', fontSize: '10px', color: '#a89478', textTransform: 'uppercase' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {payments.map((p, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid #f8f5f0' }}>
+                    <td style={{ padding: '10px 14px', color: '#78716c', whiteSpace: 'nowrap' }}>{timeAgo(p.date)}</td>
+                    <td style={{ padding: '10px 14px', fontWeight: '600' }}>{p.label}</td>
+                    <td style={{ padding: '10px 14px', textAlign: 'right', color: '#059669', fontWeight: '700' }}>{formatLKR(p.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )
+        )}
+      </div>
+      <p style={{ fontSize: '11px', color: '#a89478', marginTop: '10px' }}>
+        {tab === 'statement' ? `${statement.length} entr${statement.length === 1 ? 'y' : 'ies'} · sorted oldest to newest` : `${payments.length} payment${payments.length === 1 ? '' : 's'} · sorted oldest to newest`}
+      </p>
+    </div>
+  )
+}

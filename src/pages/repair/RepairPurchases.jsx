@@ -381,9 +381,10 @@ function SupplierPaymentModal({ shop, supplier, onClose, onPaid }) {
   const [reference, setReference] = useState('')
   const [saving, setSaving] = useState(false)
   const [outstandingPurchases, setOutstandingPurchases] = useState([])
+  const [pendingThirdParty, setPendingThirdParty] = useState([])
 
   useEffect(() => { supabase.from('bank_accounts').select('*').order('name').then(({ data }) => setBankAccounts(data || [])) }, [])
-  useEffect(() => { fetchOutstandingPurchases() }, [supplier.id])
+  useEffect(() => { fetchOutstandingPurchases(); fetchPendingThirdParty() }, [supplier.id])
 
   function fetchOutstandingPurchases() {
     supabase.from('repair_purchases').select('id, purchase_no, total, amount_paid, created_at')
@@ -391,6 +392,21 @@ function SupplierPaymentModal({ shop, supplier, onClose, onPaid }) {
       .then(({ data, error }) => {
         if (error) { toast.error('Failed to load outstanding purchases: ' + error.message); return }
         setOutstandingPurchases((data || []).filter(p => (p.total || 0) - (p.amount_paid || 0) > 0.009))
+      })
+  }
+
+  // A bulk supplier payment previously only ever paid down purchases — any
+  // 3rd-party items owed to the same supplier had their cost correctly
+  // covered by the payment at the aggregate balance level, but their own
+  // payment_status stayed 'pending' forever, since nothing here knew they
+  // existed. Fetched here so handlePay can settle them too, oldest first,
+  // alongside purchases in one combined queue.
+  function fetchPendingThirdParty() {
+    supabase.from('repair_third_party_items').select('id, item_name, cost_price, quantity, created_at')
+      .eq('supplier_id', supplier.id).eq('payment_status', 'pending').order('created_at', { ascending: true })
+      .then(({ data, error }) => {
+        if (error) { toast.error('Failed to load pending 3rd-party items: ' + error.message); return }
+        setPendingThirdParty(data || [])
       })
   }
 
@@ -411,35 +427,68 @@ function SupplierPaymentModal({ shop, supplier, onClose, onPaid }) {
       }).select().single()
       if (payErr) throw payErr
 
-      // Apply FIFO across this supplier's outstanding purchases, oldest first —
-      // recording exactly how much went to each so a later cheque return knows
-      // precisely what to reverse.
+      // Apply FIFO across this supplier's outstanding purchases AND pending
+      // 3rd-party items together, oldest first by date, so a bulk payment
+      // correctly settles whichever of the two came first — not purchases
+      // exclusively. 3rd-party items only support a binary paid/pending
+      // status (no partial-payment tracking like purchases have), so one is
+      // only marked paid if the remaining amount fully covers its cost;
+      // otherwise it's left pending and the remainder carries on to the next
+      // item in the queue, the same way an unpayable-in-full purchase would
+      // simply take a partial amount instead — skipping is the closest
+      // equivalent behavior available for an item that can't be partially
+      // settled at all.
+      // Restricted to cash/bank: void-job's reversal logic for a paid
+      // 3rd-party item only knows how to reverse cash, bank, and
+      // customer-balance-deduction settlements — cheque isn't a supported
+      // settlement method for 3rd-party items anywhere else in this app, so
+      // introducing it only here would create a paid item a future void
+      // couldn't correctly reverse. Cheque payments keep the original
+      // purchases-only behavior.
+      const settleThirdParty = method === 'cash' || method === 'bank'
+      const combinedQueue = [
+        ...outstandingPurchases.map(p => ({ kind: 'purchase', date: p.created_at, data: p })),
+        ...(settleThirdParty ? pendingThirdParty.map(t => ({ kind: 'third_party', date: t.created_at, data: t })) : []),
+      ].sort((a, b) => new Date(a.date) - new Date(b.date))
+
       let remaining = amt
-      const purchaseUpdateErrors = []
-      for (const p of outstandingPurchases) {
+      const updateErrors = []
+      for (const entry of combinedQueue) {
         if (remaining <= 0.009) break
-        const due = Math.max(0, (p.total || 0) - (p.amount_paid || 0))
-        if (due <= 0.009) continue
-        const settle = Math.min(due, remaining)
-        const { error: updErr } = await supabase.from('repair_purchases').update({
-          amount_paid: (p.amount_paid || 0) + settle,
-          credit_amount: Math.max(0, (p.total || 0) - ((p.amount_paid || 0) + settle)),
-        }).eq('id', p.id)
-        if (updErr) purchaseUpdateErrors.push(`${p.purchase_no}: ${updErr.message}`)
-        const { error: allocErr } = await supabase.from('repair_supplier_payment_allocations').insert({
-          payment_id: payment.id, purchase_id: p.id, amount: settle,
-        })
-        if (allocErr) purchaseUpdateErrors.push(`${p.purchase_no} allocation: ${allocErr.message}`)
-        remaining -= settle
+        if (entry.kind === 'purchase') {
+          const p = entry.data
+          const due = Math.max(0, (p.total || 0) - (p.amount_paid || 0))
+          if (due <= 0.009) continue
+          const settle = Math.min(due, remaining)
+          const { error: updErr } = await supabase.from('repair_purchases').update({
+            amount_paid: (p.amount_paid || 0) + settle,
+            credit_amount: Math.max(0, (p.total || 0) - ((p.amount_paid || 0) + settle)),
+          }).eq('id', p.id)
+          if (updErr) updateErrors.push(`${p.purchase_no}: ${updErr.message}`)
+          const { error: allocErr } = await supabase.from('repair_supplier_payment_allocations').insert({
+            payment_id: payment.id, purchase_id: p.id, amount: settle,
+          })
+          if (allocErr) updateErrors.push(`${p.purchase_no} allocation: ${allocErr.message}`)
+          remaining -= settle
+        } else {
+          const t = entry.data
+          const cost = (t.cost_price || 0) * (t.quantity || 1)
+          if (cost <= 0.009 || remaining < cost - 0.009) continue
+          const { error: tpErr } = await supabase.from('repair_third_party_items').update({
+            payment_status: 'paid', payment_method: method, paid_at: new Date().toISOString(),
+          }).eq('id', t.id)
+          if (tpErr) updateErrors.push(`${t.item_name}: ${tpErr.message}`)
+          remaining -= cost
+        }
       }
-      if (purchaseUpdateErrors.length > 0) {
+      if (updateErrors.length > 0) {
         // Surface this loudly rather than let the payment appear to succeed while
         // silently failing to update the purchases it was meant to settle — this
         // was previously swallowed, since a failed .update() here doesn't throw.
-        toast.error('Payment recorded, but some purchases failed to update: ' + purchaseUpdateErrors.join('; '))
+        toast.error('Payment recorded, but some items failed to update: ' + updateErrors.join('; '))
       }
-      if (outstandingPurchases.length === 0) {
-        toast.error('No outstanding purchases found for this supplier — payment recorded against balance only. If purchases exist, try closing and reopening this dialog.')
+      if (combinedQueue.length === 0) {
+        toast.error('No outstanding purchases or 3rd-party items found for this supplier — payment recorded against balance only. If any exist, try closing and reopening this dialog.')
       }
 
       await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: supplier.id, p_delta: -amt })
