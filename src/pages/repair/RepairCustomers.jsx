@@ -43,6 +43,32 @@ export async function buildCustomerStatement(c, { onBalanceHealed } = {}) {
     saleIds.length ? supabase.from('repair_sale_payments').select('*').in('sale_id', saleIds) : Promise.resolve({ data: [] }),
   ])
 
+  // Consolidate job_payments + sale_payments + standalone_payments that share
+  // the exact same timestamp back into one line — these only end up as
+  // separate rows because one payment or settlement can FIFO-split across
+  // several jobs/sales, not because the customer made several payments.
+  // Settlements get their own distinct label rather than being lumped in
+  // with ordinary cash/bank/card payments.
+  function consolidatePayments(jobPmts, salePmts, standalonePmts) {
+    const groups = {}
+    const addToGroup = (p) => {
+      const key = p.created_at + '|' + p.payment_method
+      if (!groups[key]) groups[key] = { date: p.created_at, method: p.payment_method, amount: 0 }
+      groups[key].amount += p.amount || 0
+    }
+    ;(jobPmts || []).forEach(addToGroup)
+    ;(salePmts || []).forEach(addToGroup)
+    ;(standalonePmts || []).forEach(addToGroup)
+    const isSettlement = (method) => method === 'settlement' || method === 'bulk_settlement'
+    return Object.values(groups).map(g => ({
+      date: g.date,
+      label: isSettlement(g.method) ? 'Bulk Settlement' : `Payment (${g.method})`,
+      amount: g.amount,
+      type: isSettlement(g.method) ? 'settlement' : 'payment',
+    }))
+  }
+  const consolidated = consolidatePayments(jobPayments, salePayments, standalone)
+
   const events = []
   const openingBal = fresh?.opening_balance ?? c.opening_balance
   if (openingBal > 0) {
@@ -51,42 +77,57 @@ export async function buildCustomerStatement(c, { onBalanceHealed } = {}) {
       label: 'Opening balance brought forward', debit: openingBal, credit: 0, type: 'opening',
     })
   }
+  // Charge lines are pure debits — no payment folded into the same line, so
+  // the ledger reads as a genuine chronological sequence of distinct events
+  // (charge, then payment, then next charge...) rather than each invoice's
+  // own running total appearing as a single collapsed line. invoiceBalance
+  // is what's still owed on THIS specific invoice right now — shown purely
+  // for reference on that row, and deliberately excluded from the debit/
+  // credit fields the running balance below is computed from, so it can
+  // never throw that total off.
   ;(j || []).forEach(job => {
-    events.push({ date: job.created_at, label: `Repair Job ${job.job_no} — ${job.phone_brand} ${job.phone_model}`, debit: job.grand_total || 0, credit: job.deposit_received || 0, type: 'job', source: job })
-  })
-  ;(jobPayments || []).forEach(jp => {
-    const job = (j || []).find(job => job.id === jp.job_id)
-    events.push({ date: jp.created_at, label: `Payment (${jp.payment_method}) — Job ${job?.job_no || ''}`, debit: 0, credit: jp.amount, type: 'payment', source: jp })
+    events.push({ date: job.created_at, label: `Repair Job ${job.job_no} — ${job.phone_brand} ${job.phone_model}`, debit: job.grand_total || 0, credit: 0, type: 'job', source: job, invoiceBalance: job.status !== 'voided' ? job.balance_due : null })
   })
   ;(s || []).forEach(sale => {
-    events.push({ date: sale.created_at, label: `Parts Sale ${sale.sale_no}`, debit: sale.total || 0, credit: sale.amount_paid || 0, type: 'sale', source: { ...sale, repair_customers: { name: fresh?.name || c.name } } })
-  })
-  ;(standalone || []).forEach(sp => {
-    events.push({ date: sp.created_at, label: `Payment (${sp.payment_method}${sp.bank_accounts?.name ? ' — ' + sp.bank_accounts.name : ''})`, debit: 0, credit: sp.amount, type: 'payment', source: sp })
+    events.push({ date: sale.created_at, label: `Parts Sale ${sale.sale_no}`, debit: sale.total || 0, credit: 0, type: 'sale', source: { ...sale, repair_customers: { name: fresh?.name || c.name } }, invoiceBalance: sale.status !== 'voided' ? Math.max(0, (sale.total || 0) - (sale.amount_paid || 0)) : null })
   })
   ;(saleReturns || []).forEach(r => {
     events.push({ date: r.created_at, label: `Return ${r.return_no}`, debit: 0, credit: r.total, type: 'return', source: r })
+  })
+  // Every payment gets its own line, whichever moment it happened at —
+  // including the deposit taken at job creation and the amount paid at sale
+  // creation, which previously only showed up folded into the charge line
+  // above rather than as their own ledger entries.
+  ;(j || []).forEach(job => {
+    if ((job.deposit_received || 0) > 0) {
+      events.push({ date: job.created_at, label: `Deposit — Job ${job.job_no}`, debit: 0, credit: job.deposit_received, type: 'payment' })
+    }
+  })
+  ;(s || []).forEach(sale => {
+    if ((sale.amount_paid || 0) > 0 && !(salePayments || []).some(sp => sp.sale_id === sale.id)) {
+      events.push({ date: sale.created_at, label: `Payment — Sale ${sale.sale_no}`, debit: 0, credit: sale.amount_paid, type: 'payment' })
+    }
+  })
+  consolidated.forEach(p => {
+    events.push({ date: p.date, label: p.label, debit: 0, credit: p.amount, type: p.type })
   })
   events.sort((a, b) => new Date(a.date) - new Date(b.date))
   let running = 0
   events.forEach(e => { running += e.debit - e.credit; e.balance = running })
 
-  // A genuinely complete payment history — deliberately built as its OWN list
-  // rather than folded into `events` above. Job deposits and the amount paid
-  // at sale creation are already counted inside the 'job'/'sale' entries'
-  // credit field for the running balance, so adding them again here as
-  // separate line items would double-count and corrupt that balance. This
-  // list is purely informational (no balance column), so it's safe for it to
-  // include every actual money-received event, however it was recorded.
+  // A genuinely complete payment history — kept as its OWN list rather than
+  // just reusing `events` above, since this tab is purely informational (no
+  // running balance to maintain) and specifically excludes the opening
+  // balance and every charge line, showing money received only.
+  // Deposits and sale-creation payments are each inherently tied to one
+  // specific job/sale, so they're left as their own lines rather than run
+  // through the consolidation above, which exists only for the case where
+  // one payment gets split across several jobs/sales at once.
   const payments = []
   ;(j || []).forEach(job => {
     if ((job.deposit_received || 0) > 0) {
       payments.push({ date: job.created_at, label: `Deposit — Job ${job.job_no}`, amount: job.deposit_received, source: job })
     }
-  })
-  ;(jobPayments || []).forEach(jp => {
-    const job = (j || []).find(job => job.id === jp.job_id)
-    payments.push({ date: jp.created_at, label: `Payment (${jp.payment_method}) — Job ${job?.job_no || ''}`, amount: jp.amount, source: jp })
   })
   ;(s || []).forEach(sale => {
     if ((sale.amount_paid || 0) > 0 && !(salePayments || []).some(sp => sp.sale_id === sale.id)) {
@@ -97,12 +138,8 @@ export async function buildCustomerStatement(c, { onBalanceHealed } = {}) {
       payments.push({ date: sale.created_at, label: `Payment — Sale ${sale.sale_no}`, amount: sale.amount_paid, source: sale })
     }
   })
-  ;(salePayments || []).forEach(sp => {
-    const sale = (s || []).find(sale => sale.id === sp.sale_id)
-    payments.push({ date: sp.created_at, label: `Payment (${sp.payment_method}) — Sale ${sale?.sale_no || ''}`, amount: sp.amount, source: sp })
-  })
-  ;(standalone || []).forEach(sp => {
-    payments.push({ date: sp.created_at, label: `Payment (${sp.payment_method}${sp.bank_accounts?.name ? ' — ' + sp.bank_accounts.name : ''})`, amount: sp.amount, source: sp })
+  consolidated.forEach(p => {
+    payments.push({ date: p.date, label: p.label, amount: p.amount })
   })
   payments.sort((a, b) => new Date(a.date) - new Date(b.date))
 
@@ -250,11 +287,11 @@ export default function RepairCustomers({ shop, onOpenJob, onOpenStatement }) {
               statement.length === 0 ? <div style={{ fontSize: '13px', color: '#a89478' }}>No activity yet.</div> : (
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
                   <thead><tr style={{ borderBottom: '1px solid #f3ede4' }}>
-                    {['Date', 'Description', 'Charged', 'Paid', 'Balance'].map(h => <th key={h} style={{ padding: '6px 8px', textAlign: 'left', fontSize: '10px', color: '#a89478', textTransform: 'uppercase' }}>{h}</th>)}
+                    {['Date', 'Description', 'Charged', 'Paid', 'Inv. Bal.', 'Balance'].map(h => <th key={h} style={{ padding: '6px 8px', textAlign: 'left', fontSize: '10px', color: '#a89478', textTransform: 'uppercase' }}>{h}</th>)}
                   </tr></thead>
                   <tbody>
                     {statement.map((e, i) => {
-                      const clickable = e.type !== 'opening'
+                      const clickable = e.type !== 'opening' && !!e.source
                       return (
                         <tr key={i} onClick={() => clickable && setViewingTxn(e)}
                           style={{ borderBottom: '1px solid #f8f5f0', cursor: clickable ? 'pointer' : 'default' }}
@@ -264,6 +301,7 @@ export default function RepairCustomers({ shop, onOpenJob, onOpenStatement }) {
                           <td style={{ padding: '7px 8px', fontWeight: '600' }}>{e.label}</td>
                           <td style={{ padding: '7px 8px', color: '#e11d48' }}>{formatLKR(e.debit)}</td>
                           <td style={{ padding: '7px 8px', color: '#059669' }}>{formatLKR(e.credit)}</td>
+                          <td style={{ padding: '7px 8px', color: '#a89478', fontSize: '11.5px' }}>{e.invoiceBalance != null ? formatLKR(e.invoiceBalance) : '—'}</td>
                           <td style={{ padding: '7px 8px', fontWeight: '700' }}>{formatLKR(e.balance)}</td>
                         </tr>
                       )
@@ -349,7 +387,7 @@ export default function RepairCustomers({ shop, onOpenJob, onOpenStatement }) {
 // Job/payment/return detail — sale type is handled separately by the shared
 // ViewSaleModal (same one used in Parts Sales), so this only needs to cover
 // the other three.
-function TransactionDetailModal({ event, onClose }) {
+export function TransactionDetailModal({ event, onClose }) {
   const [jobParts, setJobParts] = useState(null)
   const [returnItems, setReturnItems] = useState(null)
 
@@ -457,6 +495,15 @@ function ReceivePaymentModal({ shop, customer, jobs, sales, onClose, onPaid }) {
     if ((method === 'card' || method === 'bank') && !bankAccountId) return toast.error('Select a bank account')
     setSaving(true)
     try {
+      // One payment can FIFO-split across several jobs/sales below, each
+      // getting its own row in a different table — without something tying
+      // them together, the ledger has no way to know they were all really
+      // one payment, and ends up showing several separate lines for what the
+      // customer experienced as a single transaction. Capturing one shared
+      // timestamp up front and stamping every row from this submission with
+      // it (rather than each insert getting its own now()) gives the ledger
+      // an exact, reliable key to regroup them by.
+      const paymentTimestamp = new Date().toISOString()
       let remaining = enteredAmount
       const applied = []
       for (const item of outstandingItems) {
@@ -476,6 +523,7 @@ function ReceivePaymentModal({ shop, customer, jobs, sales, onClose, onPaid }) {
           const { error: jobPayError } = await supabase.from('repair_job_payments').insert({
             job_id: item.id, amount: take, payment_method: method,
             bank_account_id: (method === 'card' || method === 'bank') ? bankAccountId : null,
+            created_at: paymentTimestamp,
           })
           if (jobPayError) throw jobPayError
           await supabase.from('repair_jobs').update({ balance_due: Math.max(0, item.due - take) }).eq('id', item.id)
@@ -487,6 +535,7 @@ function ReceivePaymentModal({ shop, customer, jobs, sales, onClose, onPaid }) {
           const { error: salePayError } = await supabase.from('repair_sale_payments').insert({
             sale_id: item.id, amount: take, payment_method: method,
             bank_account_id: (method === 'card' || method === 'bank') ? bankAccountId : null,
+            created_at: paymentTimestamp,
           })
           if (salePayError) throw salePayError
         }
@@ -504,7 +553,7 @@ function ReceivePaymentModal({ shop, customer, jobs, sales, onClose, onPaid }) {
         await supabase.from('repair_customer_standalone_payments').insert({
           customer_id: customer.id, shop_id: shop?.id || null, amount: unallocated,
           payment_method: method, bank_account_id: (method === 'card' || method === 'bank') ? bankAccountId : null,
-          reference: 'Payment received',
+          reference: 'Payment received', created_at: paymentTimestamp,
         })
       }
 

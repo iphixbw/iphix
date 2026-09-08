@@ -6,7 +6,92 @@ import { generateRepairPurchaseNo, generateRepairSupplierNo } from '../../lib/re
 import { PartPicker, PartModal } from './RepairInventory'
 import RepairPurchaseReturns from './RepairPurchaseReturns'
 
-export default function RepairPurchases({ shop }) {
+// Shared with RepairSupplierStatement.jsx (the full-page view) so both
+// places use the exact same statement logic rather than two copies that
+// could drift apart.
+export async function buildSupplierStatement(supplier) {
+  const supplierId = supplier.id
+  const [{ data: purchases }, { data: payments }, { data: thirdPartyItems }, { data: returns }] = await Promise.all([
+    supabase.from('repair_purchases').select('*').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
+    supabase.from('repair_supplier_standalone_payments').select('*, bank_accounts(name)').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
+    supabase.from('repair_third_party_items').select('*, repair_jobs(job_no), repair_sales(sale_no)').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
+    supabase.from('repair_purchase_returns').select('*').eq('supplier_id', supplierId).neq('status', 'voided').order('created_at', { ascending: true }),
+  ])
+  const events = []
+  if (supplier.opening_balance > 0) {
+    events.push({
+      date: supplier.created_at || new Date(0).toISOString(), type: 'opening',
+      label: 'Opening balance brought forward',
+      debit: supplier.opening_balance, credit: 0, ref: 'OPEN-BAL',
+    })
+  }
+  ;(purchases || []).forEach(p => events.push({
+    date: p.created_at, type: 'purchase', label: `Purchase ${p.purchase_no}`,
+    debit: p.total, credit: 0, ref: p.purchase_no, source: p, kind: 'real_purchase',
+    invoiceBalance: p.status !== 'voided' ? Math.max(0, (p.total || 0) - (p.amount_paid || 0)) : null,
+  }))
+  ;(purchases || []).forEach(p => {
+    if ((p.initial_payment || 0) > 0) {
+      events.push({ date: p.created_at, type: 'payment', label: `Initial Payment — Purchase ${p.purchase_no}`, debit: 0, credit: p.initial_payment })
+    }
+  })
+  ;(returns || []).forEach(r => events.push({
+    date: r.created_at, type: 'return', label: `Return ${r.return_no}`,
+    debit: 0, credit: r.total, ref: r.return_no, source: r,
+  }))
+  ;(thirdPartyItems || []).forEach(t => {
+    const lineTotal = (t.cost_price || 0) * (t.quantity || 1)
+    const ref = t.repair_jobs?.job_no || t.repair_sales?.sale_no || ''
+    events.push({
+      date: t.created_at, type: 'purchase',
+      label: `3rd-party item — ${t.item_name}${ref ? ` (${ref})` : ''}`,
+      debit: lineTotal, credit: 0, ref, source: t, kind: 'third_party',
+    })
+    if (t.payment_status === 'paid' && t.paid_at) {
+      events.push({
+        date: t.paid_at, type: 'payment',
+        label: `Settled (${t.payment_method || 'unknown'}) — ${t.item_name}`,
+        debit: 0, credit: lineTotal, ref, source: t, kind: 'third_party',
+      })
+    }
+  })
+  ;(payments || []).forEach(pay => {
+    events.push({
+      date: pay.created_at, type: 'payment', label: `Payment (${pay.payment_method}${pay.bank_accounts?.name ? ' — ' + pay.bank_accounts.name : ''})`,
+      debit: 0, credit: pay.amount, ref: pay.reference, source: pay,
+    })
+    if (pay.cheque_status === 'returned') {
+      events.push({
+        date: pay.returned_at || pay.created_at, type: 'reversal',
+        label: 'Cheque returned/bounced — payment reversed',
+        debit: pay.amount, credit: 0, ref: pay.reference, source: pay,
+      })
+    }
+  })
+  events.sort((a, b) => new Date(a.date) - new Date(b.date))
+  let running = 0
+  events.forEach(e => { running += e.debit - e.credit; e.balance = running })
+
+  const pmts = []
+  ;(purchases || []).forEach(p => {
+    if ((p.initial_payment || 0) > 0) {
+      pmts.push({ date: p.created_at, label: `Initial Payment — Purchase ${p.purchase_no}`, amount: p.initial_payment })
+    }
+  })
+  ;(payments || []).forEach(pay => {
+    pmts.push({ date: pay.created_at, label: `Payment (${pay.payment_method}${pay.bank_accounts?.name ? ' — ' + pay.bank_accounts.name : ''})`, amount: pay.amount })
+  })
+  ;(thirdPartyItems || []).forEach(t => {
+    if (t.payment_status === 'paid' && t.paid_at) {
+      pmts.push({ date: t.paid_at, label: `Settled (${t.payment_method || 'unknown'}) — ${t.item_name}`, amount: (t.cost_price || 0) * (t.quantity || 1) })
+    }
+  })
+  pmts.sort((a, b) => new Date(a.date) - new Date(b.date))
+
+  return { statement: events, purchases: purchases || [], payments: pmts }
+}
+
+export default function RepairPurchases({ shop, onOpenStatement }) {
   const [tab, setTab] = useState('purchases')
   const [purchases, setPurchases] = useState([])
   const [suppliers, setSuppliers] = useState([])
@@ -33,6 +118,7 @@ export default function RepairPurchases({ shop }) {
     setViewItems(data || [])
     setViewing(p)
   }
+
   const [viewingSupplierTxn, setViewingSupplierTxn] = useState(null)
 
   return (
@@ -93,7 +179,7 @@ export default function RepairPurchases({ shop }) {
           {purchases.length === 0 && <div style={{ padding: '48px', textAlign: 'center', color: '#a89478' }}>No purchases yet.</div>}
         </div>
       ) : tab === 'suppliers' ? (
-        <SupplierList shop={shop} suppliers={suppliers} onChanged={fetchAll} />
+        <SupplierList shop={shop} suppliers={suppliers} onChanged={fetchAll} onOpenStatement={onOpenStatement} />
       ) : (
         <RepairPurchaseReturns shop={shop} />
       )}
@@ -106,14 +192,26 @@ export default function RepairPurchases({ shop }) {
   )
 }
 
-function SupplierList({ shop, suppliers, onChanged }) {
+function SupplierList({ shop, suppliers, onChanged, onOpenStatement }) {
   const [showNew, setShowNew] = useState(false)
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [saving, setSaving] = useState(false)
   const [selected, setSelected] = useState(null)
   const [statement, setStatement] = useState([])
+  const [supplierPurchases, setSupplierPurchases] = useState([])
+  const [supplierPayments, setSupplierPayments] = useState([])
+  const [detailTab, setDetailTab] = useState('statement')
   const [showPay, setShowPay] = useState(false)
+  const [viewingSupplierTxn, setViewingSupplierTxn] = useState(null)
+  const [viewing, setViewing] = useState(null)
+  const [viewItems, setViewItems] = useState([])
+
+  async function viewPurchase(p) {
+    const { data } = await supabase.from('repair_purchase_items').select('*, repair_parts(name, sku)').eq('purchase_id', p.id)
+    setViewItems(data || [])
+    setViewing(p)
+  }
 
   async function handleAdd() {
     if (!name.trim()) return toast.error('Supplier name required')
@@ -129,6 +227,7 @@ function SupplierList({ shop, suppliers, onChanged }) {
 
   async function openSupplier(s) {
     setSelected(s)
+    setDetailTab('statement')
     const { data: fresh } = await supabase.from('repair_suppliers').select('*').eq('id', s.id).single()
     let supplierRow = fresh || s
     if (fresh) setSelected(fresh)
@@ -139,22 +238,6 @@ function SupplierList({ shop, suppliers, onChanged }) {
       supabase.from('repair_purchase_returns').select('total').eq('supplier_id', supplierRow.id).neq('status', 'voided'),
       supabase.from('repair_supplier_standalone_payments').select('amount').eq('supplier_id', supplierRow.id),
     ])
-    // Same self-healing recalc as customers — keeps outstanding_balance
-    // resilient to any gap in the incremental adjust-RPC calls (like the one
-    // that turned up for customers), rather than trusting it's always been
-    // perfectly kept in sync everywhere. Deliberately mirrors the ledger's
-    // OWN math exactly (same frozen initial_payment per purchase, same full
-    // standalone-payment amounts) rather than using each purchase's live
-    // amount_paid — a standalone payment that gets FIFO-allocated across
-    // several purchases reduces each one's amount_paid AND still counts as
-    // its own full-amount ledger line, so mixing live purchase balances with
-    // full standalone-payment totals would double-count the allocated
-    // portion (or miss it entirely for the unallocated excess) — using the
-    // same frozen/full-amount pairing as the ledger avoids both. Combined
-    // Accounts settlements route through a real repair_supplier_standalone_
-    // payments row (see RepairCombinedAccounts.jsx), so standaloneForCalc
-    // above already picks them up — no separate settlements term needed, and
-    // adding one back would double-count every settlement.
     const trueBalance = (supplierRow.opening_balance || 0)
       + (purchases || []).reduce((s, p) => s + Math.max(0, (p.total || 0) - (p.initial_payment || 0)), 0)
       + (thirdPartyItems || []).reduce((s, t) => s + (t.cost_price || 0) * (t.quantity || 1), 0)
@@ -163,75 +246,19 @@ function SupplierList({ shop, suppliers, onChanged }) {
     if (trueBalance !== supplierRow.outstanding_balance) {
       const { data: updated, error: healErr } = await supabase.from('repair_suppliers').update({ outstanding_balance: trueBalance }).eq('id', supplierRow.id).select().single()
       if (healErr) {
-        // Don't leave this silent — the modal would otherwise show the
-        // freshly-computed (correct) number while the list keeps showing
-        // the stale stored one, with nothing to explain the mismatch.
         toast.error('Balance recalculated but failed to save: ' + healErr.message)
       } else if (updated) {
-        supplierRow = updated; setSelected(updated); setSuppliers(ss => ss.map(sp => sp.id === updated.id ? updated : sp))
+        supplierRow = updated; setSelected(updated)
       }
     }
-
     await loadStatement(supplierRow)
   }
 
   async function loadStatement(supplier) {
-    const supplierId = supplier.id
-    const [{ data: purchases }, { data: payments }, { data: thirdPartyItems }, { data: returns }] = await Promise.all([
-      supabase.from('repair_purchases').select('*').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
-      supabase.from('repair_supplier_standalone_payments').select('*, bank_accounts(name)').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
-      supabase.from('repair_third_party_items').select('*, repair_jobs(job_no), repair_sales(sale_no)').eq('supplier_id', supplierId).order('created_at', { ascending: true }),
-      supabase.from('repair_purchase_returns').select('*').eq('supplier_id', supplierId).neq('status', 'voided').order('created_at', { ascending: true }),
-    ])
-    const events = []
-    if (supplier.opening_balance > 0) {
-      events.push({
-        date: supplier.created_at || new Date(0).toISOString(), type: 'opening',
-        label: 'Opening balance brought forward',
-        debit: supplier.opening_balance, credit: 0, ref: 'OPEN-BAL',
-      })
-    }
-    ;(purchases || []).forEach(p => events.push({
-      date: p.created_at, type: 'purchase', label: `Purchase ${p.purchase_no}`,
-      debit: p.total, credit: p.initial_payment || 0, ref: p.purchase_no, source: p, kind: 'real_purchase',
-    }))
-    ;(returns || []).forEach(r => events.push({
-      date: r.created_at, type: 'return', label: `Return ${r.return_no}`,
-      debit: 0, credit: r.total, ref: r.return_no, source: r,
-    }))
-    ;(thirdPartyItems || []).forEach(t => {
-      const lineTotal = (t.cost_price || 0) * (t.quantity || 1)
-      const ref = t.repair_jobs?.job_no || t.repair_sales?.sale_no || ''
-      events.push({
-        date: t.created_at, type: 'purchase',
-        label: `3rd-party item — ${t.item_name}${ref ? ` (${ref})` : ''}`,
-        debit: lineTotal, credit: 0, ref, source: t, kind: 'third_party',
-      })
-      if (t.payment_status === 'paid' && t.paid_at) {
-        events.push({
-          date: t.paid_at, type: 'payment',
-          label: `Settled (${t.payment_method || 'unknown'}) — ${t.item_name}`,
-          debit: 0, credit: lineTotal, ref, source: t, kind: 'third_party',
-        })
-      }
-    })
-    ;(payments || []).forEach(pay => {
-      events.push({
-        date: pay.created_at, type: 'payment', label: `Payment (${pay.payment_method}${pay.bank_accounts?.name ? ' — ' + pay.bank_accounts.name : ''})`,
-        debit: 0, credit: pay.amount, ref: pay.reference, source: pay,
-      })
-      if (pay.cheque_status === 'returned') {
-        events.push({
-          date: pay.returned_at || pay.created_at, type: 'reversal',
-          label: 'Cheque returned/bounced — payment reversed',
-          debit: pay.amount, credit: 0, ref: pay.reference, source: pay,
-        })
-      }
-    })
-    events.sort((a, b) => new Date(a.date) - new Date(b.date))
-    let running = 0
-    events.forEach(e => { running += e.debit - e.credit; e.balance = running })
-    setStatement(events)
+    const { statement, purchases, payments } = await buildSupplierStatement(supplier)
+    setStatement(statement)
+    setSupplierPurchases(purchases)
+    setSupplierPayments(payments)
   }
 
   const totalPurchased = statement.filter(e => e.type === 'purchase').reduce((s, e) => s + e.debit, 0)
@@ -254,6 +281,7 @@ function SupplierList({ shop, suppliers, onChanged }) {
       </div>
 
       <button onClick={() => setShowNew(true)} style={{ marginBottom: '14px', padding: '9px 18px', background: '#fef3e2', color: '#d4881f', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '700', fontSize: '13px' }}>+ Add Supplier</button>
+
       <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #f3ede4', overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr style={{ background: '#fdf8f3', borderBottom: '2px solid #f3ede4' }}>
@@ -283,7 +311,7 @@ function SupplierList({ shop, suppliers, onChanged }) {
                 <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#1c1917', margin: '0 0 2px' }}>{selected.name}</h3>
                 <p style={{ fontSize: '13px', color: '#8a7a63', margin: 0 }}>{selected.supplier_no} {selected.phone && `· ${selected.phone}`}</p>
               </div>
-              <button onClick={() => { setSelected(null); setStatement([]) }} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#a89478' }}>✕</button>
+              <button onClick={() => { setSelected(null); setStatement([]); setSupplierPurchases([]); setSupplierPayments([]) }} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#a89478' }}>✕</button>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '14px' }}>
@@ -306,35 +334,98 @@ function SupplierList({ shop, suppliers, onChanged }) {
               💵 Record Payment
             </button>
 
-            <h4 style={{ fontSize: '13px', fontWeight: '800', color: '#1c1917', margin: '0 0 10px' }}>Activity Statement</h4>
-            {statement.length === 0 ? <div style={{ fontSize: '13px', color: '#a89478' }}>No activity yet.</div> : (
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
-                <thead><tr style={{ borderBottom: '1px solid #f3ede4' }}>
-                  {['Date', 'Description', 'Debit', 'Credit', 'Balance'].map(h => <th key={h} style={{ padding: '6px 8px', textAlign: 'left', fontSize: '10px', color: '#a89478', textTransform: 'uppercase' }}>{h}</th>)}
-                </tr></thead>
-                <tbody>
-                  {statement.map((e, i) => {
-                    const clickable = !!e.source
-                    function handleClick() {
-                      if (!clickable) return
-                      if (e.type === 'purchase' && e.kind === 'real_purchase') viewPurchase(e.source)
-                      else setViewingSupplierTxn(e)
-                    }
-                    return (
-                      <tr key={i} onClick={handleClick}
-                        style={{ borderBottom: '1px solid #f8f5f0', cursor: clickable ? 'pointer' : 'default' }}
-                        onMouseEnter={ev => clickable && (ev.currentTarget.style.background = '#fdf8f3')}
-                        onMouseLeave={ev => clickable && (ev.currentTarget.style.background = 'white')}>
-                        <td style={{ padding: '7px 8px', color: '#78716c' }}>{timeAgo(e.date)}</td>
-                        <td style={{ padding: '7px 8px', fontWeight: '600' }}>{e.label}</td>
-                        <td style={{ padding: '7px 8px', color: '#e11d48' }}>{e.debit > 0 ? formatLKR(e.debit) : '—'}</td>
-                        <td style={{ padding: '7px 8px', color: '#059669' }}>{e.credit > 0 ? formatLKR(e.credit) : '—'}</td>
-                        <td style={{ padding: '7px 8px', fontWeight: '700' }}>{formatLKR(e.balance)}</td>
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
+              {[{ id: 'statement', label: 'Activity Statement' }, { id: 'payments', label: `Payments (${supplierPayments.length})` }, { id: 'invoices', label: `Invoices (${supplierPurchases.length})` }].map(t => (
+                <button key={t.id} onClick={() => setDetailTab(t.id)}
+                  style={{ padding: '6px 14px', borderRadius: '8px', border: 'none', background: detailTab === t.id ? '#1c1917' : '#f5f1ea', color: detailTab === t.id ? '#f0b23d' : '#78716c', fontWeight: '700', fontSize: '12px', cursor: 'pointer' }}>
+                  {t.label}
+                </button>
+              ))}
+              {detailTab === 'statement' && onOpenStatement && (
+                <button onClick={() => onOpenStatement(selected.id)}
+                  style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid #e7dfd3', background: 'white', color: '#d4881f', fontWeight: '700', fontSize: '12px', cursor: 'pointer', marginLeft: 'auto' }}>
+                  Open Full Statement ↗
+                </button>
+              )}
+            </div>
+
+            {detailTab === 'statement' && (
+              statement.length === 0 ? <div style={{ fontSize: '13px', color: '#a89478' }}>No activity yet.</div> : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
+                  <thead><tr style={{ borderBottom: '1px solid #f3ede4' }}>
+                    {['Date', 'Description', 'Debit', 'Credit', 'Inv. Bal.', 'Balance'].map(h => <th key={h} style={{ padding: '6px 8px', textAlign: 'left', fontSize: '10px', color: '#a89478', textTransform: 'uppercase' }}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {statement.map((e, i) => {
+                      const clickable = !!e.source
+                      function handleClick() {
+                        if (!clickable) return
+                        if (e.type === 'purchase' && e.kind === 'real_purchase') viewPurchase(e.source)
+                        else setViewingSupplierTxn(e)
+                      }
+                      return (
+                        <tr key={i} onClick={handleClick}
+                          style={{ borderBottom: '1px solid #f8f5f0', cursor: clickable ? 'pointer' : 'default' }}
+                          onMouseEnter={ev => clickable && (ev.currentTarget.style.background = '#fdf8f3')}
+                          onMouseLeave={ev => clickable && (ev.currentTarget.style.background = 'white')}>
+                          <td style={{ padding: '7px 8px', color: '#78716c' }}>{timeAgo(e.date)}</td>
+                          <td style={{ padding: '7px 8px', fontWeight: '600' }}>{e.label}</td>
+                          <td style={{ padding: '7px 8px', color: '#e11d48' }}>{e.debit > 0 ? formatLKR(e.debit) : '—'}</td>
+                          <td style={{ padding: '7px 8px', color: '#059669' }}>{e.credit > 0 ? formatLKR(e.credit) : '—'}</td>
+                          <td style={{ padding: '7px 8px', color: '#a89478', fontSize: '11.5px' }}>{e.invoiceBalance != null ? formatLKR(e.invoiceBalance) : '—'}</td>
+                          <td style={{ padding: '7px 8px', fontWeight: '700' }}>{formatLKR(e.balance)}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )
+            )}
+
+            {detailTab === 'payments' && (
+              supplierPayments.length === 0 ? <div style={{ fontSize: '13px', color: '#a89478' }}>No payments recorded yet.</div> : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
+                  <thead><tr style={{ borderBottom: '1px solid #f3ede4' }}>
+                    {['Date', 'Description', 'Amount'].map(h => <th key={h} style={{ padding: '6px 8px', textAlign: h === 'Amount' ? 'right' : 'left', fontSize: '10px', color: '#a89478', textTransform: 'uppercase' }}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {supplierPayments.map((p, i) => (
+                      <tr key={i} style={{ borderBottom: '1px solid #f8f5f0' }}>
+                        <td style={{ padding: '7px 8px', color: '#78716c' }}>{timeAgo(p.date)}</td>
+                        <td style={{ padding: '7px 8px', fontWeight: '600' }}>{p.label}</td>
+                        <td style={{ padding: '7px 8px', textAlign: 'right', color: '#059669', fontWeight: '700' }}>{formatLKR(p.amount)}</td>
                       </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
+                    ))}
+                  </tbody>
+                </table>
+              )
+            )}
+
+            {detailTab === 'invoices' && (
+              supplierPurchases.length === 0 ? <div style={{ fontSize: '13px', color: '#a89478' }}>No purchases yet.</div> : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
+                  <thead><tr style={{ borderBottom: '1px solid #f3ede4' }}>
+                    {['Date', 'Purchase No.', 'Total', 'Paid', 'Balance', 'Status'].map(h => <th key={h} style={{ padding: '6px 8px', textAlign: h === 'Purchase No.' ? 'left' : 'right', fontSize: '10px', color: '#a89478', textTransform: 'uppercase' }}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {supplierPurchases.slice().sort((a, b) => new Date(a.created_at) - new Date(b.created_at)).map(p => (
+                      <tr key={p.id} onClick={() => p.status !== 'voided' && viewPurchase(p)}
+                        style={{ borderBottom: '1px solid #f8f5f0', cursor: p.status !== 'voided' ? 'pointer' : 'default' }}
+                        onMouseEnter={ev => p.status !== 'voided' && (ev.currentTarget.style.background = '#fdf8f3')}
+                        onMouseLeave={ev => p.status !== 'voided' && (ev.currentTarget.style.background = 'white')}>
+                        <td style={{ padding: '7px 8px', color: '#78716c' }}>{timeAgo(p.created_at)}</td>
+                        <td style={{ padding: '7px 8px', fontWeight: '700', color: '#d4881f' }}>{p.purchase_no}</td>
+                        <td style={{ padding: '7px 8px', textAlign: 'right' }}>{formatLKR(p.total)}</td>
+                        <td style={{ padding: '7px 8px', textAlign: 'right', color: '#059669' }}>{formatLKR(p.amount_paid)}</td>
+                        <td style={{ padding: '7px 8px', textAlign: 'right', fontWeight: '700', color: p.status !== 'voided' && (p.total - p.amount_paid) > 0.009 ? '#e11d48' : '#94a3b8' }}>
+                          {p.status === 'voided' ? '—' : formatLKR(Math.max(0, p.total - p.amount_paid))}
+                        </td>
+                        <td style={{ padding: '7px 8px', textAlign: 'right', textTransform: 'capitalize', color: p.status === 'voided' ? '#e11d48' : '#78716c' }}>{p.status}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )
             )}
           </div>
         </div>
@@ -363,6 +454,9 @@ function SupplierList({ shop, suppliers, onChanged }) {
           </div>
         </div>
       )}
+
+      {viewing && <ViewPurchaseModal purchase={viewing} items={viewItems} onClose={() => setViewing(null)} />}
+      {viewingSupplierTxn && <SupplierTransactionDetailModal event={viewingSupplierTxn} onClose={() => setViewingSupplierTxn(null)} />}
     </div>
   )
 }
@@ -427,24 +521,6 @@ function SupplierPaymentModal({ shop, supplier, onClose, onPaid }) {
       }).select().single()
       if (payErr) throw payErr
 
-      // Apply FIFO across this supplier's outstanding purchases AND pending
-      // 3rd-party items together, oldest first by date, so a bulk payment
-      // correctly settles whichever of the two came first — not purchases
-      // exclusively. 3rd-party items only support a binary paid/pending
-      // status (no partial-payment tracking like purchases have), so one is
-      // only marked paid if the remaining amount fully covers its cost;
-      // otherwise it's left pending and the remainder carries on to the next
-      // item in the queue, the same way an unpayable-in-full purchase would
-      // simply take a partial amount instead — skipping is the closest
-      // equivalent behavior available for an item that can't be partially
-      // settled at all.
-      // Restricted to cash/bank: void-job's reversal logic for a paid
-      // 3rd-party item only knows how to reverse cash, bank, and
-      // customer-balance-deduction settlements — cheque isn't a supported
-      // settlement method for 3rd-party items anywhere else in this app, so
-      // introducing it only here would create a paid item a future void
-      // couldn't correctly reverse. Cheque payments keep the original
-      // purchases-only behavior.
       const settleThirdParty = method === 'cash' || method === 'bank'
       const combinedQueue = [
         ...outstandingPurchases.map(p => ({ kind: 'purchase', date: p.created_at, data: p })),
@@ -482,15 +558,11 @@ function SupplierPaymentModal({ shop, supplier, onClose, onPaid }) {
         }
       }
       if (updateErrors.length > 0) {
-        // Surface this loudly rather than let the payment appear to succeed while
-        // silently failing to update the purchases it was meant to settle — this
-        // was previously swallowed, since a failed .update() here doesn't throw.
         toast.error('Payment recorded, but some items failed to update: ' + updateErrors.join('; '))
       }
       if (combinedQueue.length === 0) {
         toast.error('No outstanding purchases or 3rd-party items found for this supplier — payment recorded against balance only. If any exist, try closing and reopening this dialog.')
       }
-
       await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: supplier.id, p_delta: -amt })
       if (method === 'cash') {
         await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'payment', amount: -amt, reference: supplier.name, notes: 'Supplier payment' })
@@ -499,12 +571,6 @@ function SupplierPaymentModal({ shop, supplier, onClose, onPaid }) {
         await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) - amt }).eq('id', bankAccountId)
         await supabase.from('bank_transactions').insert({ bank_account_id: bankAccountId, type: 'withdrawal', amount: amt, reference: `Repair supplier payment: ${supplier.name}`, notes: reference || '' })
       } else if (method === 'cheque') {
-        // Cheque out — recorded pending, uses the same shared bank_accounts table
-        // as the ERP retail side, so it shows up alongside retail's own cheques
-        // in Bank > Cheques Due until presented/returned. No balance deduction
-        // yet — that happens when the cheque is actually presented, matching
-        // the retail cheque flow's convention. Linked both ways to the payment
-        // record, so a return can find its way back to the purchases it settled.
         const { data: btx } = await supabase.from('bank_transactions').insert({
           bank_account_id: bankAccountId, type: 'cheque_out', amount: amt,
           cheque_no: chequeNo || null, cheque_date: chequeDate || null, cheque_status: 'pending',
@@ -514,9 +580,6 @@ function SupplierPaymentModal({ shop, supplier, onClose, onPaid }) {
         if (btx) await supabase.from('repair_supplier_standalone_payments').update({ bank_transaction_id: btx.id }).eq('id', payment.id)
       }
       toast.success('Payment recorded')
-      // Fetch the updated supplier directly here and pass it back — the parent
-      // no longer needs its own follow-up fetch, which removes any possibility
-      // of a race between this write completing and that fetch reading stale data.
       const { data: freshSupplier } = await supabase.from('repair_suppliers').select('*').eq('id', supplier.id).single()
       onPaid(freshSupplier)
     } catch (e) { toast.error('Failed: ' + e.message) }
@@ -602,9 +665,6 @@ function NewPurchaseModal({ shop, suppliers, onClose, onCreated, onSuppliersChan
   useEffect(() => { fetchParts() }, [])
   useEffect(() => { supabase.from('bank_accounts').select('*').order('name').then(({ data }) => setBankAccounts(data || [])) }, [])
 
-  // A plain .select() caps at Supabase's default 1000-row limit — with a
-  // large enough parts catalog, some parts silently never show up in the
-  // picker, with no error to indicate anything was cut off.
   async function fetchParts() {
     let all = []
     let from = 0
@@ -655,21 +715,16 @@ function NewPurchaseModal({ shop, suppliers, onClose, onCreated, onSuppliersChan
         bank_account_id: paymentMethod === 'bank' ? bankAccountId : null,
       }).select().single()
       if (error) throw error
-
       for (const r of validRows) {
         const qty = parseFloat(r.quantity), cost = parseFloat(r.unit_cost) || 0
         await supabase.from('repair_purchase_items').insert({ purchase_id: purchase.id, part_id: r.part_id, quantity: qty, unit_cost: cost, line_total: qty * cost })
-        // FIFO: add a new cost-layer batch instead of overwriting an average
         await supabase.rpc('repair_fifo_add_batch', { p_part_id: r.part_id, p_purchase_id: purchase.id, p_quantity: qty, p_unit_cost: cost })
         await supabase.rpc('repair_add_part_stock', { p_part_id: r.part_id, p_quantity: qty })
-        // purchase_price is a plain overwrite (most recent price, reference only) — not an increment, so no race risk
         await supabase.from('repair_parts').update({ purchase_price: cost }).eq('id', r.part_id)
       }
-
       if (credit > 0) {
         await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: supplierId, p_delta: credit })
       }
-      // Cash/bank payment made at purchase time
       if (paid > 0) {
         if (paymentMethod === 'cash') {
           await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'payment', amount: -paid, reference: purchase_no, notes: 'Repair purchase payment' })
@@ -679,7 +734,6 @@ function NewPurchaseModal({ shop, suppliers, onClose, onCreated, onSuppliersChan
           await supabase.from('bank_transactions').insert({ bank_account_id: bankAccountId, type: 'withdrawal', amount: paid, reference: `Repair purchase: ${purchase_no}`, notes: '' })
         }
       }
-
       toast.success(`Purchase ${purchase_no} created!`)
       onCreated()
     } catch (e) { toast.error('Failed: ' + e.message) }
@@ -687,12 +741,10 @@ function NewPurchaseModal({ shop, suppliers, onClose, onCreated, onSuppliersChan
   }
 
   const inp = { width: '100%', padding: '8px 10px', border: '1.5px solid #e7dfd3', borderRadius: '7px', fontSize: '13px', boxSizing: 'border-box' }
-
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
       <div style={{ background: 'white', borderRadius: '20px', padding: '26px', width: '100%', maxWidth: '640px', maxHeight: '88vh', overflowY: 'auto' }}>
         <h2 style={{ fontSize: '18px', fontWeight: '800', color: '#1c1917', margin: '0 0 16px' }}>New Repair Purchase</h2>
-
         <div style={{ marginBottom: '14px' }}>
           <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Supplier</label>
           <div style={{ display: 'flex', gap: '8px' }}>
@@ -713,7 +765,6 @@ function NewPurchaseModal({ shop, suppliers, onClose, onCreated, onSuppliersChan
             </div>
           )}
         </div>
-
         <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Parts</label>
         <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.7fr 1fr auto', gap: '8px', marginTop: '8px', marginBottom: '2px' }}>
           <span style={{ fontSize: '10px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Part</span>
@@ -737,7 +788,6 @@ function NewPurchaseModal({ shop, suppliers, onClose, onCreated, onSuppliersChan
           <button onClick={addRow} style={{ padding: '6px 14px', background: '#fef3e2', color: '#d4881f', border: 'none', borderRadius: '7px', cursor: 'pointer', fontSize: '12px', fontWeight: '700' }}>+ Add Row</button>
           <button onClick={() => setShowNewPart(true)} style={{ padding: '6px 14px', background: '#eef2ff', color: '#1e40af', border: 'none', borderRadius: '7px', cursor: 'pointer', fontSize: '12px', fontWeight: '700' }}>+ New Part</button>
         </div>
-
         <div style={{ display: 'grid', gridTemplateColumns: paymentMethod === 'bank' ? '1fr 1fr 1fr' : '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
           <div>
             <label style={{ fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Payment Method</label>
@@ -759,24 +809,21 @@ function NewPurchaseModal({ shop, suppliers, onClose, onCreated, onSuppliersChan
             </div>
           )}
         </div>
-
         <div style={{ background: '#fdf8f3', borderRadius: '10px', padding: '14px', marginBottom: '18px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '4px' }}><span>Subtotal</span><span style={{ fontWeight: '700' }}>{formatLKR(subtotal)}</span></div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}><span>Credit Due</span><span style={{ fontWeight: '700', color: '#e11d48' }}>{formatLKR(credit)}</span></div>
         </div>
-
         <div style={{ display: 'flex', gap: '10px' }}>
           <button onClick={onClose} style={{ flex: 1, padding: '11px', background: '#f5f1ea', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '700', color: '#78716c' }}>Cancel</button>
           <button onClick={handleSave} disabled={saving} style={{ flex: 2, padding: '11px', background: 'linear-gradient(135deg,#f0b23d,#d4881f)', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '800', color: '#1c1917' }}>{saving ? 'Saving...' : '✓ Confirm Purchase'}</button>
         </div>
       </div>
-
       {showNewPart && <PartModal shop={shop} part={null} onClose={() => setShowNewPart(false)} onSaved={() => { setShowNewPart(false); fetchParts() }} />}
     </div>
   )
 }
 
-function ViewPurchaseModal({ purchase, items, onClose }) {
+export function ViewPurchaseModal({ purchase, items, onClose }) {
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
       <div style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '100%', maxWidth: '500px', maxHeight: '85vh', overflowY: 'auto' }}>
@@ -806,15 +853,13 @@ function ViewPurchaseModal({ purchase, items, onClose }) {
 // Handles everything in the supplier ledger except real purchases (which
 // reuse the existing viewPurchase/ViewPurchaseModal directly): standalone
 // payments, 3rd-party items, and purchase returns.
-function SupplierTransactionDetailModal({ event, onClose }) {
+export function SupplierTransactionDetailModal({ event, onClose }) {
   const [returnItems, setReturnItems] = useState(null)
-
   useEffect(() => {
     if (event.type === 'return') {
       supabase.from('repair_purchase_return_items').select('*, repair_parts(name)').eq('return_id', event.source.id).then(({ data }) => setReturnItems(data || []))
     }
   }, [event])
-
   const s = event.source
   const wrap = (title, color, body) => (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
@@ -827,7 +872,6 @@ function SupplierTransactionDetailModal({ event, onClose }) {
       </div>
     </div>
   )
-
   if (event.kind === 'third_party') {
     const lineTotal = (s.cost_price || 0) * (s.quantity || 1)
     return wrap(s.item_name, '#d4881f', (
@@ -840,7 +884,6 @@ function SupplierTransactionDetailModal({ event, onClose }) {
       </>
     ))
   }
-
   if (event.type === 'payment' || event.type === 'reversal') {
     return wrap(event.type === 'reversal' ? 'Cheque Returned' : 'Payment', event.type === 'reversal' ? '#e11d48' : '#059669', (
       <>
@@ -853,7 +896,6 @@ function SupplierTransactionDetailModal({ event, onClose }) {
       </>
     ))
   }
-
   if (event.type === 'return') {
     return wrap(`Return ${s.return_no}`, '#e11d48', (
       <>
@@ -874,7 +916,6 @@ function SupplierTransactionDetailModal({ event, onClose }) {
       </>
     ))
   }
-
   return null
 }
 
@@ -896,40 +937,27 @@ function VoidPurchaseModal({ shop, purchase, onClose, onVoided }) {
   const [blockedByMissingBank, setBlockedByMissingBank] = useState(false)
   const [preview, setPreview] = useState(null)
   const [fresh, setFresh] = useState(null)
-
   useEffect(() => {
     async function load() {
       const { data: freshPurchase } = await supabase.from('repair_purchases').select('*').eq('id', purchase.id).single()
       setFresh(freshPurchase || purchase)
-
       const { data: activeReturns } = await supabase.from('repair_purchase_returns').select('return_no').eq('purchase_id', purchase.id).neq('status', 'voided')
       if (activeReturns?.length) { setBlockingReturns(activeReturns); return }
-
       const initial = freshPurchase?.initial_payment || 0
       const paid = freshPurchase?.amount_paid || 0
       if (Math.abs(paid - initial) > 0.009) { setBlockedByPayment(true); return }
-
-      // This purchase predates bank_account_id being recorded at creation —
-      // there's no way to know which account to refund into. Checked here,
-      // before any reversal starts, so a block can never leave stock/balance
-      // already reversed while the purchase record still says confirmed.
       if (freshPurchase?.payment_method === 'bank' && !freshPurchase?.bank_account_id && initial > 0.009) {
         setBlockedByMissingBank(true); return
       }
-
       const { data: items } = await supabase.from('repair_purchase_items').select('*').eq('purchase_id', purchase.id)
       setPreview({ items: items || [] })
     }
     load()
   }, [purchase.id])
-
   async function handleVoid() {
     setSaving(true)
     try {
       const { items } = preview
-
-      // Stock sufficiency check up front — can't reverse stock that's since
-      // been sold or used on a job.
       for (const it of items) {
         const { data: part } = await supabase.from('repair_parts').select('current_stock, name').eq('id', it.part_id).single()
         if (part && it.quantity > (part.current_stock || 0)) {
@@ -938,7 +966,6 @@ function VoidPurchaseModal({ shop, purchase, onClose, onVoided }) {
           return
         }
       }
-
       const consumedSoFar = []
       try {
         for (const it of items) {
@@ -956,18 +983,11 @@ function VoidPurchaseModal({ shop, purchase, onClose, onVoided }) {
         throw stockErr
       }
       await supabase.from('repair_purchase_items').delete().eq('purchase_id', purchase.id)
-
-      // Reverse the debt this purchase added (total minus what was paid at
-      // creation) — the same amount that was added when it was created.
       const debtAdded = (fresh.total || 0) - (fresh.initial_payment || 0)
       if (debtAdded > 0.009) {
         const { error: balErr } = await supabase.rpc('repair_adjust_supplier_balance', { p_supplier_id: fresh.supplier_id, p_delta: -debtAdded })
         if (balErr) throw balErr
       }
-
-      // Refund whatever was paid at creation, via however it was originally
-      // paid. Checked so a failure here stops before the purchase gets
-      // marked voided below.
       const initialPayment = fresh.initial_payment || 0
       if (initialPayment > 0.009) {
         if (fresh.payment_method === 'cash') {
@@ -981,18 +1001,15 @@ function VoidPurchaseModal({ shop, purchase, onClose, onVoided }) {
           if (txErr) throw txErr
         }
       }
-
       await supabase.from('repair_purchases').update({
         status: 'voided', subtotal: 0, total: 0, amount_paid: 0, credit_amount: 0, initial_payment: 0,
         voided_at: new Date().toISOString(), void_reason: reason || null,
       }).eq('id', purchase.id)
-
       toast.success('Purchase voided — all related transactions reversed')
       onVoided()
     } catch (e) { toast.error('Failed to void: ' + e.message) }
     setSaving(false)
   }
-
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: '20px' }}>
       <div style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '100%', maxWidth: '440px' }}>

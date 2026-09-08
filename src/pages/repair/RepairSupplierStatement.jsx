@@ -1,58 +1,63 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../supabase'
 import { formatLKR, timeAgo } from '../../lib/repairConstants'
-import { buildCustomerStatement, TransactionDetailModal } from './RepairCustomers'
-import { ViewSaleModal } from './RepairSales'
+import { buildSupplierStatement, ViewPurchaseModal, SupplierTransactionDetailModal } from './RepairPurchases'
 
-// Full-page version of the Activity Statement tab in the Customers modal —
-// same underlying data and logic (via the shared buildCustomerStatement), just
-// with a whole page to work with instead of a capped-height modal. Built for
-// customers with enough history that the modal's internal scroll made it easy
-// to miss the most recent entries at the bottom.
-export default function RepairCustomerStatement({ customerId, onBack }) {
-  const [customer, setCustomer] = useState(null)
+// Full-page version of the Activity Statement in the Suppliers modal — same
+// underlying data and logic (via the shared buildSupplierStatement), just
+// with a whole page to work with instead of a capped-height modal.
+export default function RepairSupplierStatement({ supplierId, onBack }) {
+  const [supplier, setSupplier] = useState(null)
   const [statement, setStatement] = useState([])
   const [payments, setPayments] = useState([])
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState('statement')
+  const [viewingPurchase, setViewingPurchase] = useState(null)
+  const [viewingItems, setViewingItems] = useState([])
   const [viewingTxn, setViewingTxn] = useState(null)
 
-  useEffect(() => { load() }, [customerId])
+  async function viewPurchase(p) {
+    const { data } = await supabase.from('repair_purchase_items').select('*, repair_parts(name, sku)').eq('purchase_id', p.id)
+    setViewingItems(data || [])
+    setViewingPurchase(p)
+  }
+
+  useEffect(() => { load() }, [supplierId])
 
   async function load() {
     setLoading(true)
-    const { data: c } = await supabase.from('repair_customers').select('*').eq('id', customerId).single()
-    if (!c) { setLoading(false); return }
-    const { statement: st, customer: fresh, payments: pmts } = await buildCustomerStatement(c)
-    setCustomer(fresh)
+    const { data: s } = await supabase.from('repair_suppliers').select('*').eq('id', supplierId).single()
+    if (!s) { setLoading(false); return }
+    const { statement: st, payments: pmts } = await buildSupplierStatement(s)
+    setSupplier(s)
     setStatement(st)
     setPayments(pmts)
     setLoading(false)
   }
 
   if (loading) return <div style={{ padding: '60px', textAlign: 'center', color: '#a89478' }}>Loading statement...</div>
-  if (!customer) return (
+  if (!supplier) return (
     <div>
-      <button onClick={onBack} style={{ background: 'none', border: 'none', color: '#d4881f', fontWeight: '700', fontSize: '13px', cursor: 'pointer', marginBottom: '14px', padding: 0 }}>← Back to Customers</button>
-      <div style={{ padding: '48px', textAlign: 'center', color: '#a89478' }}>Customer not found.</div>
+      <button onClick={onBack} style={{ background: 'none', border: 'none', color: '#d4881f', fontWeight: '700', fontSize: '13px', cursor: 'pointer', marginBottom: '14px', padding: 0 }}>← Back to Suppliers</button>
+      <div style={{ padding: '48px', textAlign: 'center', color: '#a89478' }}>Supplier not found.</div>
     </div>
   )
 
   return (
     <div>
-      <button onClick={onBack} style={{ background: 'none', border: 'none', color: '#d4881f', fontWeight: '700', fontSize: '13px', cursor: 'pointer', marginBottom: '14px', padding: 0 }}>← Back to Customers</button>
+      <button onClick={onBack} style={{ background: 'none', border: 'none', color: '#d4881f', fontWeight: '700', fontSize: '13px', cursor: 'pointer', marginBottom: '14px', padding: 0 }}>← Back to Suppliers</button>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
-          <h1 style={{ fontSize: '22px', fontWeight: '800', color: '#1c1917', margin: '0 0 4px' }}>{customer.name}</h1>
-          <p style={{ color: '#8a7a63', fontSize: '13px', margin: 0 }}>{customer.mobile}{customer.customer_no ? ` · ${customer.customer_no}` : ''}</p>
+          <h1 style={{ fontSize: '22px', fontWeight: '800', color: '#1c1917', margin: '0 0 4px' }}>{supplier.name}</h1>
+          <p style={{ color: '#8a7a63', fontSize: '13px', margin: 0 }}>{supplier.supplier_no}{supplier.phone ? ` · ${supplier.phone}` : ''}</p>
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>
-            {customer.outstanding_balance < 0 ? 'Credit Balance' : 'Outstanding Balance'}
+            {supplier.outstanding_balance < 0 ? 'Credit Balance' : 'Outstanding'}
           </div>
-          <div style={{ fontSize: '24px', fontWeight: '800', color: customer.outstanding_balance > 0 ? '#e11d48' : customer.outstanding_balance < 0 ? '#059669' : '#1c1917' }}>
-            {formatLKR(Math.abs(customer.outstanding_balance || 0))}
+          <div style={{ fontSize: '24px', fontWeight: '800', color: supplier.outstanding_balance > 0 ? '#e11d48' : supplier.outstanding_balance < 0 ? '#059669' : '#1c1917' }}>
+            {formatLKR(Math.abs(supplier.outstanding_balance || 0))}
           </div>
         </div>
       </div>
@@ -74,16 +79,21 @@ export default function RepairCustomerStatement({ customerId, onBack }) {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid #f3ede4', background: '#fdf8f3' }}>
-                  {['Date', 'Description', 'Charged', 'Paid', 'Inv. Bal.', 'Balance'].map(h => (
+                  {['Date', 'Description', 'Debit', 'Credit', 'Inv. Bal.', 'Balance'].map(h => (
                     <th key={h} style={{ padding: '10px 14px', textAlign: h === 'Description' ? 'left' : 'right', fontSize: '10px', color: '#a89478', textTransform: 'uppercase' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {statement.map((e, i) => {
-                  const clickable = e.type !== 'opening' && !!e.source
+                  const clickable = !!e.source
+                  function handleClick() {
+                    if (!clickable) return
+                    if (e.type === 'purchase' && e.kind === 'real_purchase') viewPurchase(e.source)
+                    else setViewingTxn(e)
+                  }
                   return (
-                    <tr key={i} onClick={() => clickable && setViewingTxn(e)}
+                    <tr key={i} onClick={handleClick}
                       style={{ borderBottom: '1px solid #f8f5f0', cursor: clickable ? 'pointer' : 'default' }}
                       onMouseEnter={ev => clickable && (ev.currentTarget.style.background = '#fdf8f3')}
                       onMouseLeave={ev => clickable && (ev.currentTarget.style.background = 'white')}>
@@ -128,12 +138,8 @@ export default function RepairCustomerStatement({ customerId, onBack }) {
         {tab === 'statement' ? `${statement.length} entr${statement.length === 1 ? 'y' : 'ies'} · sorted oldest to newest` : `${payments.length} payment${payments.length === 1 ? '' : 's'} · sorted oldest to newest`}
       </p>
 
-      {viewingTxn && viewingTxn.type === 'sale' && (
-        <ViewSaleModal sale={viewingTxn.source} onClose={() => setViewingTxn(null)} />
-      )}
-      {viewingTxn && viewingTxn.type !== 'sale' && (
-        <TransactionDetailModal event={viewingTxn} onClose={() => setViewingTxn(null)} />
-      )}
+      {viewingPurchase && <ViewPurchaseModal purchase={viewingPurchase} items={viewingItems} onClose={() => setViewingPurchase(null)} />}
+      {viewingTxn && <SupplierTransactionDetailModal event={viewingTxn} onClose={() => setViewingTxn(null)} />}
     </div>
   )
 }

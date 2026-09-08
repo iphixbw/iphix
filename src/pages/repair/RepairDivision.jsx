@@ -13,6 +13,7 @@ import RepairExpenses from './RepairExpenses'
 import RepairCash from './RepairCash'
 import RepairCustomers from './RepairCustomers'
 import RepairCustomerStatement from './RepairCustomerStatement'
+import RepairSupplierStatement from './RepairSupplierStatement'
 import RepairCombinedAccounts from './RepairCombinedAccounts'
 import RepairLending from './RepairLending'
 import RepairThirdParty from './RepairThirdParty'
@@ -45,6 +46,7 @@ export default function RepairDivision({ session, activeShop, isSuperAdmin, onEx
   const [activePage, setActivePage] = useState(() => localStorage.getItem('iphix_repair_active_page') || 'dashboard')
   const [selectedJobId, setSelectedJobId] = useState(null)
   const [selectedCustomerId, setSelectedCustomerId] = useState(null)
+  const [selectedSupplierId, setSelectedSupplierId] = useState(null)
   const [loggingOut, setLoggingOut] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
@@ -56,6 +58,7 @@ export default function RepairDivision({ session, activeShop, isSuperAdmin, onEx
     setActivePage(page)
     if (page !== 'job_detail') setSelectedJobId(null)
     if (page !== 'customer_statement') setSelectedCustomerId(null)
+    if (page !== 'supplier_statement') setSelectedSupplierId(null)
     setSidebarOpen(false)
   }
 
@@ -67,6 +70,11 @@ export default function RepairDivision({ session, activeShop, isSuperAdmin, onEx
   function openCustomerStatement(customerId) {
     setSelectedCustomerId(customerId)
     setActivePage('customer_statement')
+  }
+
+  function openSupplierStatement(supplierId) {
+    setSelectedSupplierId(supplierId)
+    setActivePage('supplier_statement')
   }
 
   async function handleLogout() {
@@ -81,10 +89,11 @@ export default function RepairDivision({ session, activeShop, isSuperAdmin, onEx
       case 'jobs': return <RepairJobs shop={activeShop} onOpenJob={openJob} />
       case 'job_detail': return <RepairJobDetail jobId={selectedJobId} shop={activeShop} onBack={() => navigateTo('jobs')} />
       case 'inventory': return <RepairInventory shop={activeShop} />
-      case 'purchases': return <RepairPurchases shop={activeShop} />
+      case 'purchases': return <RepairPurchases shop={activeShop} onOpenStatement={openSupplierStatement} />
       case 'sales': return <RepairSales shop={activeShop} />
       case 'customers': return <RepairCustomers shop={activeShop} onOpenJob={openJob} onOpenStatement={openCustomerStatement} />
       case 'customer_statement': return <RepairCustomerStatement customerId={selectedCustomerId} onBack={() => navigateTo('customers')} />
+      case 'supplier_statement': return <RepairSupplierStatement supplierId={selectedSupplierId} onBack={() => navigateTo('purchases')} />
       case 'combined_accounts': return <RepairCombinedAccounts shop={activeShop} />
       case 'lending': return <RepairLending shop={activeShop} />
       case 'third_party': return <RepairThirdParty shop={activeShop} />
@@ -133,7 +142,7 @@ export default function RepairDivision({ session, activeShop, isSuperAdmin, onEx
 
         <nav style={{ flex: 1, padding: '14px 10px', overflowY: 'auto' }}>
           {MENU.map(item => {
-            const isActive = activePage === item.id || (item.id === 'jobs' && activePage === 'job_detail') || (item.id === 'customers' && activePage === 'customer_statement')
+            const isActive = activePage === item.id || (item.id === 'jobs' && activePage === 'job_detail') || (item.id === 'customers' && activePage === 'customer_statement') || (item.id === 'purchases' && activePage === 'supplier_statement')
             return (
               <button key={item.id} onClick={() => navigateTo(item.id)}
                 style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '11px 12px', borderRadius: '9px', border: 'none', cursor: 'pointer', marginBottom: '2px', background: isActive ? 'linear-gradient(135deg, #f0b23d, #d4881f)' : 'transparent', color: isActive ? '#1c1917' : '#d6c7b3', fontSize: '14px', fontWeight: isActive ? '700' : '400', textAlign: 'left', boxShadow: isActive ? '0 4px 12px rgba(240,178,61,0.3)' : 'none', transition: 'background 0.12s, color 0.12s' }}

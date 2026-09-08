@@ -255,19 +255,24 @@ function SettleModal({ link, onClose, onSettled }) {
         ...(sales || []).filter(s => (s.total - s.amount_paid) > 0).map(s => ({ kind: 'sale', id: s.id, date: s.created_at, due: s.total - s.amount_paid, amount_paid: s.amount_paid })),
       ].sort((a, b) => new Date(a.date) - new Date(b.date))
 
+      // Same reasoning as ReceivePaymentModal: a settlement can FIFO-split
+      // across several jobs/sales, each getting its own row — stamping all of
+      // them with one shared timestamp lets the customer ledger regroup them
+      // back into the single settlement event they actually were.
+      const settleTimestamp = new Date().toISOString()
       let remaining = amt
       for (const item of outstandingItems) {
         if (remaining <= 0) break
         const take = Math.min(remaining, item.due)
         if (item.kind === 'job') {
-          const { error: jobPayError } = await supabase.from('repair_job_payments').insert({ job_id: item.id, amount: take, payment_method: 'settlement' })
+          const { error: jobPayError } = await supabase.from('repair_job_payments').insert({ job_id: item.id, amount: take, payment_method: 'settlement', created_at: settleTimestamp })
           if (jobPayError) throw jobPayError
           const { error: jobUpdError } = await supabase.from('repair_jobs').update({ balance_due: Math.max(0, item.due - take) }).eq('id', item.id)
           if (jobUpdError) throw jobUpdError
         } else {
           const { error: saleUpdError } = await supabase.from('repair_sales').update({ amount_paid: item.amount_paid + take }).eq('id', item.id)
           if (saleUpdError) throw saleUpdError
-          const { error: salePayError } = await supabase.from('repair_sale_payments').insert({ sale_id: item.id, amount: take, payment_method: 'settlement' })
+          const { error: salePayError } = await supabase.from('repair_sale_payments').insert({ sale_id: item.id, amount: take, payment_method: 'settlement', created_at: settleTimestamp })
           if (salePayError) throw salePayError
         }
         remaining -= take
@@ -280,6 +285,7 @@ function SettleModal({ link, onClose, onSettled }) {
         const { error: standaloneError } = await supabase.from('repair_customer_standalone_payments').insert({
           customer_id: link.customer_id, amount: remaining, payment_method: 'settlement',
           notes: `Combined Accounts settlement vs ${link.repair_suppliers?.name || 'supplier'}`,
+          created_at: settleTimestamp,
         })
         if (standaloneError) throw standaloneError
       }
