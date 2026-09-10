@@ -46,6 +46,16 @@ export const CONDITION_OPTIONS = [
   'Software Issue', 'Finger-print Issue', 'Button Issue',
 ]
 
+// Base set for Quick Repair's single fault selector — separate from
+// CONDITION_OPTIONS above (which is a multi-select checklist for the
+// Standard flow's intake condition). Custom entries typed into Quick Repair
+// are persisted in repair_quick_fault_types and merged with this list at
+// runtime, the same way custom accessories already work.
+export const QUICK_FAULT_OPTIONS = [
+  'Charge Pin Replacement', 'Mic Replacement', 'Display Replacement',
+  'Speaker Replacement', 'Earpiece Replacement', 'Water Damage',
+]
+
 export const PART_CATEGORIES = [
   'Displays', 'Batteries', 'Charging Ports', 'ICs', 'Camera Modules',
   'Back Glass', 'Housing', 'Flex Cables', 'Buttons', 'Speakers',

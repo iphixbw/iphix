@@ -1,15 +1,18 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../supabase'
 import toast from 'react-hot-toast'
-import { JOB_STATUSES, PRIORITIES, ACCESSORY_OPTIONS, CONDITION_OPTIONS, statusMeta, priorityMeta, isCollectedWithDue, formatLKR, timeAgo, printJobReceipt } from '../../lib/repairConstants'
+import { JOB_STATUSES, PRIORITIES, ACCESSORY_OPTIONS, CONDITION_OPTIONS, QUICK_FAULT_OPTIONS, statusMeta, priorityMeta, isCollectedWithDue, formatLKR, timeAgo, printJobReceipt } from '../../lib/repairConstants'
 import { generateRepairJobNo, generateRepairCustomerNo } from '../../lib/repairHelpers'
+import { PartPicker } from './RepairInventory'
 
 export default function RepairJobs({ shop, onOpenJob }) {
   const [jobs, setJobs] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
+  const [showChoice, setShowChoice] = useState(false)
   const [showNew, setShowNew] = useState(false)
+  const [showQuick, setShowQuick] = useState(false)
 
   useEffect(() => { fetchJobs() }, [shop?.id])
 
@@ -41,7 +44,7 @@ export default function RepairJobs({ shop, onOpenJob }) {
           <h1 style={{ fontSize: '22px', fontWeight: '800', color: '#1c1917', margin: '0 0 4px' }}>Repair Jobs</h1>
           <p style={{ color: '#8a7a63', fontSize: '14px', margin: 0 }}>{filtered.length} job{filtered.length !== 1 ? 's' : ''}</p>
         </div>
-        <button onClick={() => setShowNew(true)}
+        <button onClick={() => setShowChoice(true)}
           style={{ padding: '11px 22px', background: 'linear-gradient(135deg,#f0b23d,#d4881f)', color: '#1c1917', border: 'none', borderRadius: '12px', cursor: 'pointer', fontWeight: '800', fontSize: '14px', boxShadow: '0 4px 14px rgba(212,136,31,0.35)' }}>
           + New Repair Job
         </button>
@@ -99,7 +102,40 @@ export default function RepairJobs({ shop, onOpenJob }) {
         </div>
       )}
 
+      {showChoice && (
+        <JobTypeChoiceModal
+          onClose={() => setShowChoice(false)}
+          onQuick={() => { setShowChoice(false); setShowQuick(true) }}
+          onStandard={() => { setShowChoice(false); setShowNew(true) }}
+        />
+      )}
       {showNew && <NewJobModal shop={shop} onClose={() => setShowNew(false)} onCreated={(id) => { setShowNew(false); fetchJobs(); onOpenJob(id) }} />}
+      {showQuick && <QuickRepairModal shop={shop} onClose={() => setShowQuick(false)} onCreated={(id) => { setShowQuick(false); fetchJobs(); onOpenJob(id) }} />}
+    </div>
+  )
+}
+
+// A quick, walk-in-while-you-wait repair with a lump-sum price and no
+// customer intake, versus the full Standard flow (customer details, phone
+// condition, warranty, etc.) — this choice determines which of the two forms
+// below gets shown.
+function JobTypeChoiceModal({ onClose, onQuick, onStandard }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+      <div style={{ background: 'white', borderRadius: '20px', padding: '26px', width: '100%', maxWidth: '440px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '18px' }}>
+          <h2 style={{ fontSize: '18px', fontWeight: '800', color: '#1c1917', margin: 0 }}>New Repair Job</h2>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#a89478' }}>✕</button>
+        </div>
+        <button onClick={onQuick} style={{ width: '100%', textAlign: 'left', padding: '18px', marginBottom: '12px', background: '#fef3e2', border: '1.5px solid #f0d9b5', borderRadius: '14px', cursor: 'pointer' }}>
+          <div style={{ fontSize: '15px', fontWeight: '800', color: '#d4881f', marginBottom: '4px' }}>⚡ Quick Repair</div>
+          <div style={{ fontSize: '12.5px', color: '#8a7a63', lineHeight: '1.5' }}>Walk-in, done on the spot. No customer details — just pick the fault, set a price, add any parts used, and collect payment.</div>
+        </button>
+        <button onClick={onStandard} style={{ width: '100%', textAlign: 'left', padding: '18px', background: '#f8f5f0', border: '1.5px solid #e7dfd3', borderRadius: '14px', cursor: 'pointer' }}>
+          <div style={{ fontSize: '15px', fontWeight: '800', color: '#1c1917', marginBottom: '4px' }}>🔧 Standard Repair</div>
+          <div style={{ fontSize: '12.5px', color: '#8a7a63', lineHeight: '1.5' }}>Full intake — customer details, phone condition, warranty, and the usual repair job tracking.</div>
+        </button>
+      </div>
     </div>
   )
 }
@@ -408,3 +444,233 @@ function NewJobModal({ shop, onClose, onCreated }) {
     </div>
   )
 }
+
+// Quick Repair — a walk-in, done-on-the-spot job. No customer intake (a
+// single shared "Cash Customer" record is reused across every quick job,
+// found or created once here), a single fault selection instead of the
+// Standard flow's multi-select condition checklist, one lump-sum price
+// rather than itemized labour/parts, and parts + payment collected in the
+// same form rather than added later on the job's own page. The job is
+// marked 'collected' immediately — a quick repair is, by definition, done by
+// the time this form is submitted, whether or not it's been paid in full
+// (matching the existing isCollectedWithDue concept used elsewhere).
+function QuickRepairModal({ shop, onClose, onCreated }) {
+  const [saving, setSaving] = useState(false)
+  const [fault, setFault] = useState('')
+  const [customFault, setCustomFault] = useState('')
+  const [savedFaultOptions, setSavedFaultOptions] = useState([])
+  const [price, setPrice] = useState('')
+  const [parts, setParts] = useState([])
+  const [rows, setRows] = useState([{ part_id: '', quantity: '1' }])
+  const [paymentMethod, setPaymentMethod] = useState('cash')
+  const [paymentAmount, setPaymentAmount] = useState('')
+  const [bankAccountId, setBankAccountId] = useState('')
+  const [bankAccounts, setBankAccounts] = useState([])
+
+  useEffect(() => {
+    supabase.from('repair_quick_fault_types').select('name').order('name').then(({ data }) => {
+      setSavedFaultOptions((data || []).map(r => r.name))
+    })
+    supabase.from('repair_parts').select('id, name, sku, purchase_price, average_cost, current_stock').order('name').then(({ data }) => {
+      setParts(data || [])
+    })
+    supabase.from('bank_accounts').select('*').order('name').then(({ data }) => setBankAccounts(data || []))
+  }, [])
+
+  const allFaultOptions = [...new Set([...QUICK_FAULT_OPTIONS, ...savedFaultOptions])].sort()
+
+  // Same persistence pattern as addCustomAccessory in NewJobModal above —
+  // remembered for next time, with a duplicate insert silently ignored
+  // rather than surfaced as a failure.
+  async function addCustomFault() {
+    const name = customFault.trim()
+    if (!name) return
+    setFault(name)
+    setCustomFault('')
+    if (!allFaultOptions.includes(name)) {
+      const { error } = await supabase.from('repair_quick_fault_types').insert({ name })
+      if (!error) setSavedFaultOptions(prev => [...prev, name].sort())
+    }
+  }
+
+  function updateRow(i, field, val) {
+    setRows(rs => rs.map((r, idx) => idx === i ? { ...r, [field]: val } : r))
+  }
+  function addRow() { setRows(rs => [...rs, { part_id: '', quantity: '1' }]) }
+  function removeRow(i) { setRows(rs => rs.filter((_, idx) => idx !== i)) }
+
+  async function getOrCreateCashCustomer() {
+    const { data: existing } = await supabase.from('repair_customers').select('id').eq('mobile', '0000000000').maybeSingle()
+    if (existing) return existing.id
+    const customer_no = await generateRepairCustomerNo()
+    const { data: created, error } = await supabase.from('repair_customers').insert({
+      customer_no, name: 'Cash Customer', mobile: '0000000000',
+    }).select().single()
+    if (error) throw error
+    return created.id
+  }
+
+  async function handleSave() {
+    if (!fault) return toast.error('Select a fault')
+    const priceNum = parseFloat(price)
+    if (isNaN(priceNum) || priceNum <= 0) return toast.error('Enter a valid price')
+    const validRows = rows.filter(r => r.part_id && parseFloat(r.quantity) > 0)
+    for (const r of validRows) {
+      const part = parts.find(p => p.id === r.part_id)
+      if (part && parseFloat(r.quantity) > (part.current_stock || 0)) {
+        return toast.error(`Only ${part.current_stock || 0} of "${part.name}" in stock`)
+      }
+    }
+    const paidNum = parseFloat(paymentAmount) || 0
+    if (paidNum > 0 && (paymentMethod === 'card') && !bankAccountId) return toast.error('Select a bank account')
+    setSaving(true)
+    try {
+      const customerId = await getOrCreateCashCustomer()
+      const job_no = await generateRepairJobNo()
+
+      const { data: newJob, error } = await supabase.from('repair_jobs').insert({
+        job_no, shop_id: shop?.id || null, customer_id: customerId,
+        phone_brand: 'Quick Repair', phone_model: fault,
+        phone_condition: [fault], reported_problem: fault,
+        estimated_cost: priceNum, grand_total: priceNum,
+        cost_total: 0, gross_profit: priceNum, net_profit: priceNum,
+        deposit_received: 0, balance_due: priceNum,
+        priority: 'medium', status: 'collected',
+      }).select().single()
+      if (error) throw error
+
+      // FIFO-consume and log each part used, exactly matching how AddPartModal
+      // does it on a job's own page — unit_price/line_total are 0 here since
+      // Quick Repair charges one lump price rather than itemizing parts; these
+      // rows exist purely for cost and stock tracking, not customer billing.
+      let costTotal = 0
+      for (const r of validRows) {
+        const qty = parseFloat(r.quantity)
+        const { data: unitCost } = await supabase.rpc('repair_fifo_consume', { p_part_id: r.part_id, p_quantity: qty })
+        await supabase.from('repair_job_parts').insert({
+          job_id: newJob.id, part_id: r.part_id, quantity: qty,
+          unit_cost: unitCost || 0, unit_price: 0, line_total: 0, is_third_party: false,
+        })
+        await supabase.rpc('repair_deduct_part_stock', { p_part_id: r.part_id, p_quantity: qty })
+        costTotal += (unitCost || 0) * qty
+      }
+      localStorage.setItem('iphix_repair_stock_changed', String(Date.now()))
+
+      // Collect payment — a real cash/bank movement, same convention as
+      // every other payment-at-creation flow in this app (NewSaleModal,
+      // NewPurchaseModal), not just a number on the job record.
+      if (paidNum > 0) {
+        if (paymentMethod === 'cash') {
+          await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'sale', amount: paidNum, reference: job_no, notes: 'Quick repair payment' })
+        } else if (paymentMethod === 'card') {
+          const bank = bankAccounts.find(b => b.id === bankAccountId)
+          await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) + paidNum }).eq('id', bankAccountId)
+          await supabase.from('bank_transactions').insert({ bank_account_id: bankAccountId, type: 'deposit', amount: paidNum, reference: `Quick repair: ${job_no}`, notes: '' })
+        }
+      }
+
+      const grossProfit = priceNum - costTotal
+      const balanceDue = priceNum - paidNum
+      await supabase.from('repair_jobs').update({
+        cost_total: costTotal, gross_profit: grossProfit, net_profit: grossProfit,
+        deposit_received: paidNum, balance_due: balanceDue,
+      }).eq('id', newJob.id)
+
+      // A quick job is created and settled in one action, unlike a Standard
+      // job where balance_due is expected to be paid down over time — so any
+      // amount still outstanding needs to raise the customer's balance
+      // immediately here, the same gap that was already fixed for Standard
+      // job creation.
+      if (balanceDue > 0) {
+        await supabase.rpc('repair_adjust_customer_balance', { p_customer_id: customerId, p_delta: balanceDue })
+      }
+
+      toast.success(`Quick repair ${job_no} created!`)
+      if (window.confirm('Quick repair created! Print a POS receipt for the customer?')) {
+        const { data: freshJob } = await supabase.from('repair_jobs').select('*').eq('id', newJob.id).single()
+        const { data: cust } = await supabase.from('repair_customers').select('*').eq('id', customerId).single()
+        printJobReceipt(freshJob, cust)
+      }
+      onCreated(newJob.id)
+    } catch (e) { toast.error('Failed: ' + e.message) }
+    setSaving(false)
+  }
+
+  const inp = { width: '100%', padding: '9px 12px', border: '1.5px solid #e7dfd3', borderRadius: '8px', fontSize: '13px', boxSizing: 'border-box' }
+  const lbl = { fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase', display: 'block', marginBottom: '5px' }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+      <div style={{ background: 'white', borderRadius: '20px', padding: '26px', width: '100%', maxWidth: '480px', maxHeight: '88vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+          <h2 style={{ fontSize: '18px', fontWeight: '800', color: '#1c1917', margin: 0 }}>⚡ Quick Repair</h2>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#a89478' }}>✕</button>
+        </div>
+        <p style={{ fontSize: '12px', color: '#8a7a63', margin: '0 0 18px' }}>Recorded against a shared "Cash Customer" — no customer details needed.</p>
+
+        <label style={lbl}>Fault</label>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
+          {allFaultOptions.map(f => (
+            <button key={f} onClick={() => setFault(f)}
+              style={{ padding: '7px 12px', borderRadius: '8px', border: 'none', background: fault === f ? '#1c1917' : '#f5f1ea', color: fault === f ? '#f0b23d' : '#78716c', fontWeight: '700', fontSize: '12.5px', cursor: 'pointer' }}>
+              {f}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+          <input style={inp} placeholder="Add a new fault type..." value={customFault} onChange={e => setCustomFault(e.target.value)} onKeyDown={e => e.key === 'Enter' && addCustomFault()} />
+          <button onClick={addCustomFault} style={{ padding: '0 16px', background: '#fef3e2', color: '#d4881f', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: '700', whiteSpace: 'nowrap' }}>+ Add</button>
+        </div>
+        {fault && <div style={{ fontSize: '12px', color: '#166534', fontWeight: '700', marginBottom: '16px' }}>✓ Selected: {fault}</div>}
+
+        <label style={lbl}>Price</label>
+        <input type="number" style={{ ...inp, marginBottom: '18px' }} placeholder="0.00" value={price} onChange={e => setPrice(e.target.value)} />
+
+        <label style={lbl}>Parts Used (optional)</label>
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.7fr auto', gap: '8px', marginTop: '6px', marginBottom: '2px' }}>
+          <span style={{ fontSize: '10px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Part</span>
+          <span style={{ fontSize: '10px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>Qty</span>
+          <span></span>
+        </div>
+        {rows.map((r, i) => (
+          <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 0.7fr auto', gap: '8px', marginBottom: '8px', marginTop: '6px' }}>
+            <PartPicker shop={shop} parts={parts} value={r.part_id}
+              onChange={(id, p) => {
+                setRows(rs => rs.map((row, idx) => idx !== i ? row : { ...row, part_id: id }))
+                if (p && !parts.some(pp => pp.id === p.id)) setParts(ps => [...ps, p])
+              }} />
+            <input type="number" style={inp} placeholder="Qty" value={r.quantity} onChange={e => updateRow(i, 'quantity', e.target.value)} />
+            <button onClick={() => removeRow(i)} style={{ background: '#fee2e2', border: 'none', borderRadius: '7px', color: '#e11d48', cursor: 'pointer', padding: '0 10px' }}>✕</button>
+          </div>
+        ))}
+        <button onClick={addRow} style={{ marginBottom: '18px', padding: '6px 14px', background: '#fef3e2', color: '#d4881f', border: 'none', borderRadius: '7px', cursor: 'pointer', fontSize: '12px', fontWeight: '700' }}>+ Add Part</button>
+
+        <label style={lbl}>Collect Payment</label>
+        <div style={{ display: 'grid', gridTemplateColumns: bankAccountsNeeded(paymentMethod) ? '1fr 1fr 1fr' : '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+          <select style={inp} value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}>
+            <option value="cash">Cash</option>
+            <option value="card">Card / Bank</option>
+          </select>
+          <input type="number" style={inp} placeholder="Amount paid" value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} />
+          {paymentMethod === 'card' && (
+            <select style={inp} value={bankAccountId} onChange={e => setBankAccountId(e.target.value)}>
+              <option value="">Select account...</option>
+              {bankAccounts.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          )}
+        </div>
+        <button onClick={() => setPaymentAmount(price)} style={{ marginBottom: '20px', padding: '5px 12px', background: '#f5f1ea', color: '#78716c', border: 'none', borderRadius: '7px', cursor: 'pointer', fontSize: '11.5px', fontWeight: '700' }}>
+          Pay full amount
+        </button>
+
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button onClick={onClose} style={{ flex: 1, padding: '11px', background: '#f5f1ea', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '700', color: '#78716c' }}>Cancel</button>
+          <button onClick={handleSave} disabled={saving} style={{ flex: 2, padding: '11px', background: 'linear-gradient(135deg,#f0b23d,#d4881f)', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '800', color: '#1c1917' }}>
+            {saving ? 'Creating...' : '✓ Create & Collect'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+function bankAccountsNeeded(method) { return method === 'card' }
