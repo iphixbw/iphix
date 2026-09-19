@@ -10,7 +10,7 @@
  * Docs: https://text.lk/docs/send-sms/
  */
 
-exports.handler = async function (event) {
+export const handler = async function (event) {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) }
   }
