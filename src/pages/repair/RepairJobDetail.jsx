@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../supabase'
 import toast from 'react-hot-toast'
-import { JOB_STATUSES, PRIORITIES, CHARGE_TYPES, statusMeta, priorityMeta, formatLKR, timeAgo, printJobReceipt, printJobPaymentReceipt } from '../../lib/repairConstants'
+import { JOB_STATUSES, PRIORITIES, CHARGE_TYPES, ACCESSORY_OPTIONS, CONDITION_OPTIONS, statusMeta, priorityMeta, formatLKR, timeAgo, printJobReceipt, printJobPaymentReceipt } from '../../lib/repairConstants'
 import { PartPicker, PartNameAutocomplete, fetchOldestBatchCosts } from './RepairInventory'
 
 export default function RepairJobDetail({ jobId, shop, onBack }) {
@@ -18,6 +18,7 @@ export default function RepairJobDetail({ jobId, shop, onBack }) {
   const [showAddCharge, setShowAddCharge] = useState(false)
   const [showCollectCash, setShowCollectCash] = useState(false)
   const [showVoid, setShowVoid] = useState(false)
+  const [showEditDetails, setShowEditDetails] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editingCost, setEditingCost] = useState(false)
   const [costInput, setCostInput] = useState('')
@@ -229,7 +230,14 @@ export default function RepairJobDetail({ jobId, shop, onBack }) {
         {/* Left column */}
         <div>
           <div style={card}>
-            <h3 style={{ fontSize: '14px', fontWeight: '800', color: '#1c1917', margin: '0 0 14px' }}>📱 Device Details</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <h3 style={{ fontSize: '14px', fontWeight: '800', color: '#1c1917', margin: 0 }}>📱 Device Details</h3>
+              {job.status !== 'voided' && (
+                <button onClick={() => setShowEditDetails(true)} style={{ padding: '5px 12px', background: '#f5f1ea', color: '#78716c', border: 'none', borderRadius: '7px', cursor: 'pointer', fontSize: '11.5px', fontWeight: '700' }}>
+                  ✏️ Edit
+                </button>
+              )}
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '14px', marginBottom: '14px' }}>
               <div><div style={lbl}>IMEI</div><div style={{ fontSize: '13px', color: '#292524' }}>{job.imei || '—'}</div></div>
               <div><div style={lbl}>Serial No</div><div style={{ fontSize: '13px', color: '#292524' }}>{job.serial_no || '—'}</div></div>
@@ -494,6 +502,137 @@ export default function RepairJobDetail({ jobId, shop, onBack }) {
       {showCollectCash && <CollectPaymentModal job={job} balanceDue={job.balance_due} onClose={() => setShowCollectCash(false)} onCollected={() => { setShowCollectCash(false); refreshAndRecalc() }} />}
       {showVoid && <VoidJobModal job={job} jobParts={jobParts} thirdPartyItems={thirdPartyItems} jobPayments={jobPayments}
         onClose={() => setShowVoid(false)} onVoided={() => { setShowVoid(false); refreshAndRecalc() }} />}
+      {showEditDetails && <EditDeviceDetailsModal job={job} onClose={() => setShowEditDetails(false)} onSaved={() => { setShowEditDetails(false); fetchAll() }} />}
+    </div>
+  )
+}
+
+// Editing device details and problem/notes after the job was created —
+// same fields, same accessory/condition checkbox UI, and the same
+// remembered-custom-accessory pattern as the New Job form, just saving
+// directly to the existing job instead of creating one.
+function EditDeviceDetailsModal({ job, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    phone_brand: job.phone_brand || '', phone_model: job.phone_model || '',
+    imei: job.imei || '', serial_no: job.serial_no || '',
+    phone_colour: job.phone_colour || '', storage_capacity: job.storage_capacity || '',
+    passcode: job.passcode || '', battery_pct_intake: job.battery_pct_intake ?? '',
+    accessories_received: job.accessories_received || [], phone_condition: job.phone_condition || [],
+    other_condition_notes: job.other_condition_notes || '',
+    reported_problem: job.reported_problem || '', detailed_notes: job.detailed_notes || '',
+  })
+  const [savedAccessoryOptions, setSavedAccessoryOptions] = useState([])
+  const [customAccessory, setCustomAccessory] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    supabase.from('repair_accessory_options').select('name').order('name').then(({ data }) => {
+      setSavedAccessoryOptions((data || []).map(r => r.name))
+    })
+  }, [])
+
+  function toggleArr(field, value) {
+    setForm(f => ({ ...f, [field]: f[field].includes(value) ? f[field].filter(v => v !== value) : [...f[field], value] }))
+  }
+
+  async function addCustomAccessory(name) {
+    toggleArr('accessories_received', name)
+    if (!savedAccessoryOptions.includes(name)) {
+      const { error } = await supabase.from('repair_accessory_options').insert({ name })
+      if (!error) setSavedAccessoryOptions(prev => [...prev, name])
+    }
+  }
+
+  async function handleSave() {
+    setSaving(true)
+    try {
+      const { error } = await supabase.from('repair_jobs').update({
+        phone_brand: form.phone_brand, phone_model: form.phone_model,
+        imei: form.imei || null, serial_no: form.serial_no || null,
+        phone_colour: form.phone_colour || null, storage_capacity: form.storage_capacity || null,
+        passcode: form.passcode || null,
+        battery_pct_intake: form.battery_pct_intake === '' ? null : parseInt(form.battery_pct_intake),
+        accessories_received: form.accessories_received, phone_condition: form.phone_condition,
+        other_condition_notes: form.other_condition_notes || null,
+        reported_problem: form.reported_problem || null, detailed_notes: form.detailed_notes || null,
+      }).eq('id', job.id)
+      if (error) throw error
+      toast.success('Details updated')
+      onSaved()
+    } catch (e) { toast.error('Failed: ' + e.message) }
+    setSaving(false)
+  }
+
+  const inp = { width: '100%', padding: '8px 10px', border: '1.5px solid #e7dfd3', borderRadius: '7px', fontSize: '13px', boxSizing: 'border-box' }
+  const lbl = { fontSize: '11px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase', display: 'block', marginBottom: '4px' }
+  const grid2 = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }
+  const grid3 = { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: '12px' }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: '20px' }}>
+      <div style={{ background: 'white', borderRadius: '20px', padding: '26px', width: '100%', maxWidth: '600px', maxHeight: '88vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '18px' }}>
+          <h2 style={{ fontSize: '18px', fontWeight: '800', color: '#1c1917', margin: 0 }}>Edit Device & Problem Details</h2>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#a89478' }}>✕</button>
+        </div>
+
+        <div style={{ fontSize: '13px', fontWeight: '800', color: '#d4881f', marginBottom: '10px' }}>DEVICE</div>
+        <div style={grid2}>
+          <div><label style={lbl}>Phone Brand</label><input style={inp} value={form.phone_brand} onChange={e => setForm(f => ({ ...f, phone_brand: e.target.value }))} /></div>
+          <div><label style={lbl}>Phone Model</label><input style={inp} value={form.phone_model} onChange={e => setForm(f => ({ ...f, phone_model: e.target.value }))} /></div>
+        </div>
+        <div style={grid2}>
+          <div><label style={lbl}>IMEI</label><input style={inp} value={form.imei} onChange={e => setForm(f => ({ ...f, imei: e.target.value }))} /></div>
+          <div><label style={lbl}>Serial No</label><input style={inp} value={form.serial_no} onChange={e => setForm(f => ({ ...f, serial_no: e.target.value }))} /></div>
+        </div>
+        <div style={grid2}>
+          <div><label style={lbl}>Colour</label><input style={inp} value={form.phone_colour} onChange={e => setForm(f => ({ ...f, phone_colour: e.target.value }))} /></div>
+          <div><label style={lbl}>Storage</label><input style={inp} value={form.storage_capacity} onChange={e => setForm(f => ({ ...f, storage_capacity: e.target.value }))} /></div>
+        </div>
+        <div style={grid2}>
+          <div><label style={lbl}>Password / PIN</label><input style={inp} value={form.passcode} onChange={e => setForm(f => ({ ...f, passcode: e.target.value }))} /></div>
+          <div><label style={lbl}>Battery % at Intake</label><input type="number" min="0" max="100" style={inp} value={form.battery_pct_intake} onChange={e => setForm(f => ({ ...f, battery_pct_intake: e.target.value }))} /></div>
+        </div>
+
+        <label style={lbl}>Accessories Received</label>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
+          {[...new Set([...ACCESSORY_OPTIONS, ...savedAccessoryOptions, ...form.accessories_received])].map(a => (
+            <button key={a} onClick={() => toggleArr('accessories_received', a)}
+              style={{ padding: '6px 14px', borderRadius: '20px', border: form.accessories_received.includes(a) ? 'none' : '1.5px solid #e7dfd3', background: form.accessories_received.includes(a) ? 'linear-gradient(135deg,#f0b23d,#d4881f)' : 'white', color: form.accessories_received.includes(a) ? '#1c1917' : '#78716c', fontSize: '12px', fontWeight: '700', cursor: 'pointer' }}>
+              {a}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+          <input style={{ ...inp, flex: 1 }} placeholder="Add custom accessory..." value={customAccessory}
+            onChange={e => setCustomAccessory(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && customAccessory.trim()) { e.preventDefault(); addCustomAccessory(customAccessory.trim()); setCustomAccessory('') } }} />
+          <button onClick={() => { if (customAccessory.trim()) { addCustomAccessory(customAccessory.trim()); setCustomAccessory('') } }}
+            style={{ padding: '0 16px', background: '#fef3e2', color: '#d4881f', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: '700', whiteSpace: 'nowrap' }}>+ Add</button>
+        </div>
+
+        <label style={lbl}>Phone Condition</label>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
+          {CONDITION_OPTIONS.map(c => (
+            <button key={c} onClick={() => toggleArr('phone_condition', c)}
+              style={{ padding: '6px 14px', borderRadius: '20px', border: form.phone_condition.includes(c) ? 'none' : '1.5px solid #e7dfd3', background: form.phone_condition.includes(c) ? '#fee2e2' : 'white', color: form.phone_condition.includes(c) ? '#b91c1c' : '#78716c', fontSize: '12px', fontWeight: '700', cursor: 'pointer' }}>
+              {c}
+            </button>
+          ))}
+        </div>
+        <input style={{ ...inp, marginBottom: '20px' }} placeholder="Other condition notes..." value={form.other_condition_notes} onChange={e => setForm(f => ({ ...f, other_condition_notes: e.target.value }))} />
+
+        <div style={{ fontSize: '13px', fontWeight: '800', color: '#d4881f', marginBottom: '10px' }}>PROBLEM & NOTES</div>
+        <div style={{ marginBottom: '12px' }}><label style={lbl}>Reported Problem</label><input style={inp} value={form.reported_problem} onChange={e => setForm(f => ({ ...f, reported_problem: e.target.value }))} /></div>
+        <div style={{ marginBottom: '20px' }}><label style={lbl}>Detailed Notes</label><textarea style={{ ...inp, minHeight: '70px' }} value={form.detailed_notes} onChange={e => setForm(f => ({ ...f, detailed_notes: e.target.value }))} /></div>
+
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button onClick={onClose} style={{ flex: 1, padding: '11px', background: '#f5f1ea', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '700', color: '#78716c' }}>Cancel</button>
+          <button onClick={handleSave} disabled={saving} style={{ flex: 2, padding: '11px', background: 'linear-gradient(135deg,#f0b23d,#d4881f)', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '800', color: '#1c1917' }}>
+            {saving ? 'Saving...' : '✓ Save Changes'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

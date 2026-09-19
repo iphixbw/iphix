@@ -15,6 +15,7 @@ import RepairCustomers from './RepairCustomers'
 import RepairCustomerStatement from './RepairCustomerStatement'
 import RepairSupplierStatement from './RepairSupplierStatement'
 import RepairCombinedAccounts from './RepairCombinedAccounts'
+import RepairLedgers from './RepairLedgers'
 import RepairLending from './RepairLending'
 import RepairThirdParty from './RepairThirdParty'
 import RepairReports from './RepairReports'
@@ -31,6 +32,7 @@ const MENU = [
   { id: 'sales', icon: '🛒', label: 'Parts Sales' },
   { id: 'customers', icon: '👥', label: 'Customers' },
   { id: 'combined_accounts', icon: '⇄', label: 'Combined Accounts' },
+  { id: 'ledgers', icon: '📒', label: 'Ledgers' },
   { id: 'lending', icon: '🤝', label: 'Personal Lending' },
   { id: 'third_party', icon: '🔗', label: '3rd Party Items' },
   { id: 'expenses', icon: '📝', label: 'Expenses' },
@@ -95,6 +97,7 @@ export default function RepairDivision({ session, activeShop, isSuperAdmin, onEx
       case 'customer_statement': return <RepairCustomerStatement customerId={selectedCustomerId} onBack={() => navigateTo('customers')} />
       case 'supplier_statement': return <RepairSupplierStatement supplierId={selectedSupplierId} onBack={() => navigateTo('purchases')} />
       case 'combined_accounts': return <RepairCombinedAccounts shop={activeShop} />
+      case 'ledgers': return <RepairLedgers shop={activeShop} />
       case 'lending': return <RepairLending shop={activeShop} />
       case 'third_party': return <RepairThirdParty shop={activeShop} />
       case 'expenses': return <RepairExpenses shop={activeShop} />

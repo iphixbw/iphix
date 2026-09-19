@@ -131,6 +131,13 @@ export default function RepairPurchases({ shop, onOpenStatement }) {
   }
 
   const [viewingSupplierTxn, setViewingSupplierTxn] = useState(null)
+  const [purchaseSearch, setPurchaseSearch] = useState('')
+
+  const filteredPurchases = purchases.filter(p => {
+    if (!purchaseSearch.trim()) return true
+    const q = purchaseSearch.toLowerCase()
+    return p.purchase_no?.toLowerCase().includes(q) || p.repair_suppliers?.name?.toLowerCase().includes(q)
+  })
 
   return (
     <div>
@@ -154,6 +161,11 @@ export default function RepairPurchases({ shop, onOpenStatement }) {
         ))}
       </div>
 
+      {tab === 'purchases' && (
+        <input value={purchaseSearch} onChange={e => setPurchaseSearch(e.target.value)} placeholder="Search by purchase no. or supplier..."
+          style={{ width: '100%', maxWidth: '360px', padding: '9px 14px', border: '1.5px solid #e7dfd3', borderRadius: '10px', fontSize: '13px', marginBottom: '14px', boxSizing: 'border-box' }} />
+      )}
+
       {loading ? <div style={{ padding: '60px', textAlign: 'center', color: '#a89478' }}>Loading...</div> : tab === 'purchases' ? (
         <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #f3ede4', overflow: 'hidden' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -163,7 +175,7 @@ export default function RepairPurchases({ shop, onOpenStatement }) {
               ))}
             </tr></thead>
             <tbody>
-              {purchases.map((p, i) => (
+              {filteredPurchases.map((p, i) => (
                 <tr key={p.id} style={{ borderBottom: '1px solid #f8f5f0', background: p.status === 'voided' ? '#faf9f7' : i % 2 === 0 ? 'white' : '#fdfbf8', opacity: p.status === 'voided' ? 0.6 : 1 }}>
                   <td onClick={() => viewPurchase(p)} style={{ padding: '11px 14px', fontWeight: '700', color: '#d4881f', cursor: 'pointer' }}>{p.purchase_no}</td>
                   <td onClick={() => viewPurchase(p)} style={{ padding: '11px 14px', cursor: 'pointer' }}>{p.repair_suppliers?.name || '—'}</td>
@@ -187,7 +199,11 @@ export default function RepairPurchases({ shop, onOpenStatement }) {
               ))}
             </tbody>
           </table>
-          {purchases.length === 0 && <div style={{ padding: '48px', textAlign: 'center', color: '#a89478' }}>No purchases yet.</div>}
+          {filteredPurchases.length === 0 && (
+            <div style={{ padding: '48px', textAlign: 'center', color: '#a89478' }}>
+              {purchases.length === 0 ? 'No purchases yet.' : 'No purchases match your search.'}
+            </div>
+          )}
         </div>
       ) : tab === 'suppliers' ? (
         <SupplierList shop={shop} suppliers={suppliers} onChanged={fetchAll} onOpenStatement={onOpenStatement} />
@@ -217,6 +233,13 @@ function SupplierList({ shop, suppliers, onChanged, onOpenStatement }) {
   const [viewingSupplierTxn, setViewingSupplierTxn] = useState(null)
   const [viewing, setViewing] = useState(null)
   const [viewItems, setViewItems] = useState([])
+  const [supplierSearch, setSupplierSearch] = useState('')
+
+  const filteredSuppliers = suppliers.filter(s => {
+    if (!supplierSearch.trim()) return true
+    const q = supplierSearch.toLowerCase()
+    return s.name?.toLowerCase().includes(q) || s.supplier_no?.toLowerCase().includes(q) || s.phone?.includes(q)
+  })
 
   async function viewPurchase(p) {
     const { data } = await supabase.from('repair_purchase_items').select('*, repair_parts(name, sku)').eq('purchase_id', p.id)
@@ -303,13 +326,16 @@ function SupplierList({ shop, suppliers, onChanged, onOpenStatement }) {
 
       <button onClick={() => setShowNew(true)} style={{ marginBottom: '14px', padding: '9px 18px', background: '#fef3e2', color: '#d4881f', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '700', fontSize: '13px' }}>+ Add Supplier</button>
 
+      <input value={supplierSearch} onChange={e => setSupplierSearch(e.target.value)} placeholder="Search by name, supplier no., or phone..."
+        style={{ width: '100%', maxWidth: '360px', padding: '9px 14px', border: '1.5px solid #e7dfd3', borderRadius: '10px', fontSize: '13px', marginBottom: '14px', boxSizing: 'border-box', display: 'block' }} />
+
       <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #f3ede4', overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr style={{ background: '#fdf8f3', borderBottom: '2px solid #f3ede4' }}>
             {['Supplier No', 'Name', 'Phone', 'Outstanding'].map(h => <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: '10px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>{h}</th>)}
           </tr></thead>
           <tbody>
-            {suppliers.map((s, i) => (
+            {filteredSuppliers.map((s, i) => (
               <tr key={s.id} onClick={() => openSupplier(s)} style={{ borderBottom: '1px solid #f8f5f0', cursor: 'pointer', background: i % 2 === 0 ? 'white' : '#fdfbf8' }}>
                 <td style={{ padding: '11px 14px', color: '#d4881f', fontWeight: '700' }}>{s.supplier_no}</td>
                 <td style={{ padding: '11px 14px', fontWeight: '600' }}>{s.name}</td>
@@ -321,7 +347,11 @@ function SupplierList({ shop, suppliers, onChanged, onOpenStatement }) {
             ))}
           </tbody>
         </table>
-        {suppliers.length === 0 && <div style={{ padding: '48px', textAlign: 'center', color: '#a89478' }}>No suppliers yet.</div>}
+        {filteredSuppliers.length === 0 && (
+          <div style={{ padding: '48px', textAlign: 'center', color: '#a89478' }}>
+            {suppliers.length === 0 ? 'No suppliers yet.' : 'No suppliers match your search.'}
+          </div>
+        )}
       </div>
 
       {selected && (

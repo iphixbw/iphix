@@ -471,11 +471,26 @@ function QuickRepairModal({ shop, onClose, onCreated }) {
     supabase.from('repair_quick_fault_types').select('name').order('name').then(({ data }) => {
       setSavedFaultOptions((data || []).map(r => r.name))
     })
-    supabase.from('repair_parts').select('id, name, sku, purchase_price, average_cost, current_stock').order('name').then(({ data }) => {
-      setParts(data || [])
-    })
+    fetchParts()
     supabase.from('bank_accounts').select('*').order('name').then(({ data }) => setBankAccounts(data || []))
   }, [])
+
+  // A plain .select() caps at Supabase's default 1000-row limit — with
+  // 2,000+ parts in the catalog, this was silently dropping parts from the
+  // picker with no error to indicate anything was cut off. Same fix already
+  // applied in NewPurchaseModal.
+  async function fetchParts() {
+    let all = []
+    let from = 0
+    const PAGE_SIZE = 1000
+    while (true) {
+      const { data } = await supabase.from('repair_parts').select('id, name, sku, purchase_price, average_cost, current_stock').order('name').range(from, from + PAGE_SIZE - 1)
+      all = all.concat(data || [])
+      if (!data || data.length < PAGE_SIZE) break
+      from += PAGE_SIZE
+    }
+    setParts(all)
+  }
 
   const allFaultOptions = [...new Set([...QUICK_FAULT_OPTIONS, ...savedFaultOptions])].sort()
 
