@@ -5,11 +5,25 @@ import { JOB_STATUSES, PRIORITIES, ACCESSORY_OPTIONS, CONDITION_OPTIONS, QUICK_F
 import { generateRepairJobNo, generateRepairCustomerNo } from '../../lib/repairHelpers'
 import { PartPicker } from './RepairInventory'
 
-export default function RepairJobs({ shop, onOpenJob }) {
+// Dashboard-tile filters. These MUST stay identical to how RepairDashboard counts each tile,
+// so the number on the tile always equals the number of jobs listed after clicking it.
+const QUICK_FILTERS = {
+  today: { label: "Today's Jobs", test: j => j.status !== 'voided' && new Date(j.created_at) >= new Date(new Date().setHours(0, 0, 0, 0)) },
+  pending: { label: 'Pending Repairs', test: j => !['collected', 'cancelled', 'returned_unrepaired', 'voided'].includes(j.status) },
+  waiting_parts: { label: 'Waiting for Parts', test: j => j.status === 'waiting_parts' },
+  ready: { label: 'Ready for Collection', test: j => j.status === 'ready' },
+  collected: { label: 'Completed (Collected)', test: j => j.status === 'collected' },
+  in_progress: { label: 'In Progress', test: j => j.status === 'in_progress' },
+}
+
+export default function RepairJobs({ shop, onOpenJob, quickFilter: quickFilterProp }) {
   const [jobs, setJobs] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
+  // Set when arriving from a dashboard tile; uses the exact same rules the tile used to count.
+  const [quickFilter, setQuickFilter] = useState(quickFilterProp || null)
+  useEffect(() => { setQuickFilter(quickFilterProp || null) }, [quickFilterProp])
   const [showChoice, setShowChoice] = useState(false)
   const [showNew, setShowNew] = useState(false)
   const [showQuick, setShowQuick] = useState(false)
@@ -27,6 +41,7 @@ export default function RepairJobs({ shop, onOpenJob }) {
 
   const filtered = jobs.filter(j => {
     const matchesStatus = statusFilter === 'all' || j.status === statusFilter
+    const matchesQuick = !quickFilter || !QUICK_FILTERS[quickFilter] || QUICK_FILTERS[quickFilter].test(j)
     const matchesSearch = !search ||
       j.job_no?.toLowerCase().includes(search.toLowerCase()) ||
       j.phone_brand?.toLowerCase().includes(search.toLowerCase()) ||
@@ -34,7 +49,7 @@ export default function RepairJobs({ shop, onOpenJob }) {
       j.imei?.toLowerCase().includes(search.toLowerCase()) ||
       j.repair_customers?.name?.toLowerCase().includes(search.toLowerCase()) ||
       j.repair_customers?.mobile?.includes(search)
-    return matchesStatus && matchesSearch
+    return matchesStatus && matchesQuick && matchesSearch
   })
 
   return (
@@ -49,6 +64,13 @@ export default function RepairJobs({ shop, onOpenJob }) {
           + New Repair Job
         </button>
       </div>
+
+      {quickFilter && QUICK_FILTERS[quickFilter] && (
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', marginBottom: '12px', padding: '6px 8px 6px 14px', background: '#fef3e2', border: '1.5px solid #f0d9b0', borderRadius: '999px', fontSize: '13px', fontWeight: '700', color: '#b45309' }}>
+          Showing: {QUICK_FILTERS[quickFilter].label}
+          <button onClick={() => setQuickFilter(null)} title="Show all jobs" style={{ border: 'none', background: '#f0b23d', color: '#1c1917', width: '22px', height: '22px', borderRadius: '50%', cursor: 'pointer', fontWeight: '800', fontSize: '12px', lineHeight: 1 }}>✕</button>
+        </div>
+      )}
 
       {/* Filters */}
       <div style={{ display: 'flex', gap: '10px', marginBottom: '18px', flexWrap: 'wrap' }}>
@@ -148,7 +170,9 @@ function NewJobModal({ shop, onClose, onCreated }) {
   const [nameResults, setNameResults] = useState([])
   const [showNameDropdown, setShowNameDropdown] = useState(false)
   const [checkingMobile, setCheckingMobile] = useState(false)
+  const [bankAccounts, setBankAccounts] = useState([])
   const [form, setForm] = useState({
+    deposit_method: 'cash', deposit_bank_account_id: '',
     customer_name: '', customer_mobile: '', alt_mobile: '', email: '',
     phone_brand: '', phone_model: '', imei: '', serial_no: '', phone_colour: '', storage_capacity: '',
     passcode: '', battery_pct_intake: '', accessories_received: [], phone_condition: [], other_condition_notes: '',
@@ -160,6 +184,7 @@ function NewJobModal({ shop, onClose, onCreated }) {
     supabase.from('repair_accessory_options').select('name').order('name').then(({ data }) => {
       setSavedAccessoryOptions((data || []).map(r => r.name))
     })
+    supabase.from('bank_accounts').select('*').order('name').then(({ data }) => setBankAccounts(data || []))
   }, [])
 
   useEffect(() => {
@@ -226,6 +251,8 @@ function NewJobModal({ shop, onClose, onCreated }) {
     if (!form.phone_brand.trim()) return toast.error('Phone brand is required')
     const estCost = parseFloat(form.estimated_cost)
     if (isNaN(estCost) || estCost <= 0) return toast.error('Estimated cost is required and must be greater than 0')
+    const depositCheck = parseFloat(form.deposit_received) || 0
+    if (depositCheck > 0 && form.deposit_method !== 'cash' && !form.deposit_bank_account_id) return toast.error('Select the bank account the deposit went into')
     setSaving(true)
     try {
       // Find or create customer by mobile
@@ -264,6 +291,19 @@ function NewJobModal({ shop, onClose, onCreated }) {
         status: 'received',
       }).select().single()
       if (error) throw error
+
+      // A deposit is real money received, so it must hit the cash drawer or a
+      // bank account like every other payment — previously it was only stored
+      // as a number on the job and never reached the cash ledger / bank.
+      if (deposit > 0) {
+        if (form.deposit_method === 'cash') {
+          await supabase.from('repair_cash_ledger').insert({ shop_id: shop?.id || null, type: 'sale', amount: deposit, reference: job_no, notes: 'Job deposit received' })
+        } else {
+          const bank = bankAccounts.find(b => b.id === form.deposit_bank_account_id)
+          await supabase.from('bank_accounts').update({ balance: (bank?.balance || 0) + deposit }).eq('id', form.deposit_bank_account_id)
+          await supabase.from('bank_transactions').insert({ bank_account_id: form.deposit_bank_account_id, type: 'deposit', amount: deposit, reference: `Job deposit: ${job_no}`, notes: `${form.deposit_method} deposit` })
+        }
+      }
 
       // Job creation never raised the customer's outstanding_balance for the
       // unpaid portion — only credit sales did. Their balance still
@@ -407,7 +447,25 @@ function NewJobModal({ shop, onClose, onCreated }) {
                 {PRIORITIES.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
               </select>
             </div>
-            <div><label style={lbl}>Deposit Received (LKR)</label><input type="number" style={inp} value={form.deposit_received} onChange={e => setForm(f => ({ ...f, deposit_received: e.target.value }))} /></div>
+            <div>
+              <label style={lbl}>Deposit Received (LKR)</label>
+              <input type="number" style={inp} value={form.deposit_received} onChange={e => setForm(f => ({ ...f, deposit_received: e.target.value }))} />
+              {(parseFloat(form.deposit_received) || 0) > 0 && (
+                <div style={{ marginTop: '6px', display: 'flex', gap: '6px' }}>
+                  <select style={inp} value={form.deposit_method} onChange={e => setForm(f => ({ ...f, deposit_method: e.target.value }))}>
+                    <option value="cash">Cash</option>
+                    <option value="card">Card</option>
+                    <option value="bank_transfer">Bank Transfer</option>
+                  </select>
+                  {form.deposit_method !== 'cash' && (
+                    <select style={inp} value={form.deposit_bank_account_id} onChange={e => setForm(f => ({ ...f, deposit_bank_account_id: e.target.value }))}>
+                      <option value="">Bank account…</option>
+                      {bankAccounts.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    </select>
+                  )}
+                </div>
+              )}
+            </div>
             <div style={{ display: 'flex', alignItems: 'flex-end', paddingBottom: '3px' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: '600', color: '#44403c', cursor: 'pointer' }}>
                 <input type="checkbox" checked={form.warranty} onChange={e => setForm(f => ({ ...f, warranty: e.target.checked }))} /> Under Warranty
@@ -471,26 +529,11 @@ function QuickRepairModal({ shop, onClose, onCreated }) {
     supabase.from('repair_quick_fault_types').select('name').order('name').then(({ data }) => {
       setSavedFaultOptions((data || []).map(r => r.name))
     })
-    fetchParts()
+    supabase.from('repair_parts').select('id, name, sku, purchase_price, average_cost, current_stock').order('name').then(({ data }) => {
+      setParts(data || [])
+    })
     supabase.from('bank_accounts').select('*').order('name').then(({ data }) => setBankAccounts(data || []))
   }, [])
-
-  // A plain .select() caps at Supabase's default 1000-row limit — with
-  // 2,000+ parts in the catalog, this was silently dropping parts from the
-  // picker with no error to indicate anything was cut off. Same fix already
-  // applied in NewPurchaseModal.
-  async function fetchParts() {
-    let all = []
-    let from = 0
-    const PAGE_SIZE = 1000
-    while (true) {
-      const { data } = await supabase.from('repair_parts').select('id, name, sku, purchase_price, average_cost, current_stock').order('name').range(from, from + PAGE_SIZE - 1)
-      all = all.concat(data || [])
-      if (!data || data.length < PAGE_SIZE) break
-      from += PAGE_SIZE
-    }
-    setParts(all)
-  }
 
   const allFaultOptions = [...new Set([...QUICK_FAULT_OPTIONS, ...savedFaultOptions])].sort()
 

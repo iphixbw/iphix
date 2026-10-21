@@ -105,12 +105,12 @@ export default function RepairDashboard({ shop, onOpenJob, navigateTo }) {
   if (loading) return <div style={{ padding: '60px', textAlign: 'center', color: '#a89478' }}>Loading repair dashboard...</div>
 
   const statCards = [
-    { label: "Today's Jobs", value: stats.todayCount, icon: '📅', color: '#d4881f', bg: '#fef3e2', page: 'jobs' },
-    { label: 'Pending Repairs', value: stats.pendingCount, icon: '⏳', color: '#2563eb', bg: '#eff6ff', page: 'jobs' },
-    { label: 'Waiting for Parts', value: stats.waitingPartsCount, icon: '📦', color: '#ea580c', bg: '#fff7ed', page: 'jobs' },
-    { label: 'Ready for Collection', value: stats.readyCount, icon: '✅', color: '#059669', bg: '#f0fdf4', page: 'jobs' },
-    { label: 'Completed (Collected)', value: stats.completedCount, icon: '🎉', color: '#166534', bg: '#dcfce7', page: 'jobs' },
-    { label: 'In Progress', value: stats.inProgressCount, icon: '🔧', color: '#7c3aed', bg: '#f5f3ff', page: 'jobs' },
+    { label: "Today's Jobs", value: stats.todayCount, icon: '📅', color: '#d4881f', bg: '#fef3e2', page: 'jobs', filter: 'today' },
+    { label: 'Pending Repairs', value: stats.pendingCount, icon: '⏳', color: '#2563eb', bg: '#eff6ff', page: 'jobs', filter: 'pending' },
+    { label: 'Waiting for Parts', value: stats.waitingPartsCount, icon: '📦', color: '#ea580c', bg: '#fff7ed', page: 'jobs', filter: 'waiting_parts' },
+    { label: 'Ready for Collection', value: stats.readyCount, icon: '✅', color: '#059669', bg: '#f0fdf4', page: 'jobs', filter: 'ready' },
+    { label: 'Completed (Collected)', value: stats.completedCount, icon: '🎉', color: '#166534', bg: '#dcfce7', page: 'jobs', filter: 'collected' },
+    { label: 'In Progress', value: stats.inProgressCount, icon: '🔧', color: '#7c3aed', bg: '#f5f3ff', page: 'jobs', filter: 'in_progress' },
   ]
 
   return (
@@ -127,7 +127,7 @@ export default function RepairDashboard({ shop, onOpenJob, navigateTo }) {
       {/* Stat grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '14px', marginBottom: '24px' }}>
         {statCards.map(s => (
-          <div key={s.label} onClick={() => navigateTo(s.page)}
+          <div key={s.label} onClick={() => navigateTo(s.page, s.filter)}
             style={{ background: 'white', borderRadius: '16px', padding: '18px', boxShadow: '0 1px 3px rgba(28,25,23,0.06), 0 1px 2px rgba(28,25,23,0.04)', border: '1px solid #f3ede4', cursor: 'pointer', transition: 'transform 0.15s, box-shadow 0.15s' }}
             onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 8px 20px rgba(28,25,23,0.08)' }}
             onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 1px 3px rgba(28,25,23,0.06), 0 1px 2px rgba(28,25,23,0.04)' }}>

@@ -15,7 +15,6 @@ import RepairCustomers from './RepairCustomers'
 import RepairCustomerStatement from './RepairCustomerStatement'
 import RepairSupplierStatement from './RepairSupplierStatement'
 import RepairCombinedAccounts from './RepairCombinedAccounts'
-import RepairLedgers from './RepairLedgers'
 import RepairLending from './RepairLending'
 import RepairThirdParty from './RepairThirdParty'
 import RepairReports from './RepairReports'
@@ -32,7 +31,6 @@ const MENU = [
   { id: 'sales', icon: '🛒', label: 'Parts Sales' },
   { id: 'customers', icon: '👥', label: 'Customers' },
   { id: 'combined_accounts', icon: '⇄', label: 'Combined Accounts' },
-  { id: 'ledgers', icon: '📒', label: 'Ledgers' },
   { id: 'lending', icon: '🤝', label: 'Personal Lending' },
   { id: 'third_party', icon: '🔗', label: '3rd Party Items' },
   { id: 'expenses', icon: '📝', label: 'Expenses' },
@@ -49,6 +47,7 @@ export default function RepairDivision({ session, activeShop, isSuperAdmin, onEx
   const [selectedJobId, setSelectedJobId] = useState(null)
   const [selectedCustomerId, setSelectedCustomerId] = useState(null)
   const [selectedSupplierId, setSelectedSupplierId] = useState(null)
+  const [jobsQuickFilter, setJobsQuickFilter] = useState(null)   // set by dashboard tiles, e.g. 'pending'
   const [loggingOut, setLoggingOut] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
@@ -56,8 +55,9 @@ export default function RepairDivision({ session, activeShop, isSuperAdmin, onEx
     localStorage.setItem('iphix_repair_active_page', activePage)
   }, [activePage])
 
-  function navigateTo(page) {
+  function navigateTo(page, quickFilter = null) {
     setActivePage(page)
+    setJobsQuickFilter(page === 'jobs' ? quickFilter : null)
     if (page !== 'job_detail') setSelectedJobId(null)
     if (page !== 'customer_statement') setSelectedCustomerId(null)
     if (page !== 'supplier_statement') setSelectedSupplierId(null)
@@ -88,7 +88,7 @@ export default function RepairDivision({ session, activeShop, isSuperAdmin, onEx
   function renderPage() {
     switch (activePage) {
       case 'dashboard': return <RepairDashboard shop={activeShop} onOpenJob={openJob} navigateTo={navigateTo} />
-      case 'jobs': return <RepairJobs shop={activeShop} onOpenJob={openJob} />
+      case 'jobs': return <RepairJobs shop={activeShop} onOpenJob={openJob} quickFilter={jobsQuickFilter} />
       case 'job_detail': return <RepairJobDetail jobId={selectedJobId} shop={activeShop} onBack={() => navigateTo('jobs')} />
       case 'inventory': return <RepairInventory shop={activeShop} />
       case 'purchases': return <RepairPurchases shop={activeShop} onOpenStatement={openSupplierStatement} />
@@ -97,11 +97,10 @@ export default function RepairDivision({ session, activeShop, isSuperAdmin, onEx
       case 'customer_statement': return <RepairCustomerStatement customerId={selectedCustomerId} onBack={() => navigateTo('customers')} />
       case 'supplier_statement': return <RepairSupplierStatement supplierId={selectedSupplierId} onBack={() => navigateTo('purchases')} />
       case 'combined_accounts': return <RepairCombinedAccounts shop={activeShop} />
-      case 'ledgers': return <RepairLedgers shop={activeShop} />
       case 'lending': return <RepairLending shop={activeShop} />
       case 'third_party': return <RepairThirdParty shop={activeShop} />
       case 'expenses': return <RepairExpenses shop={activeShop} />
-      case 'cash': return <RepairCash shop={activeShop} />
+      case 'cash': return <RepairCash shop={activeShop} isSuperAdmin={isSuperAdmin} />
       case 'analytics': return <RepairAnalytics shop={activeShop} />
       case 'reports': return <RepairReports shop={activeShop} />
       case 'settings': return <RepairSettings shop={activeShop} />
