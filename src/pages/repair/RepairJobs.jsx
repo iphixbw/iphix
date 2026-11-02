@@ -529,9 +529,20 @@ function QuickRepairModal({ shop, onClose, onCreated }) {
     supabase.from('repair_quick_fault_types').select('name').order('name').then(({ data }) => {
       setSavedFaultOptions((data || []).map(r => r.name))
     })
-    supabase.from('repair_parts').select('id, name, sku, purchase_price, average_cost, current_stock').order('name').then(({ data }) => {
-      setParts(data || [])
-    })
+    // Supabase returns at most 1,000 rows per request, so a single query silently
+    // dropped every part past the first thousand — page through the whole catalog.
+    ;(async () => {
+      const PAGE_SIZE = 1000
+      let all = [], from = 0
+      while (true) {
+        const { data } = await supabase.from('repair_parts').select('id, name, sku, brand, compatible_models, purchase_price, average_cost, current_stock')
+          .order('name').order('id').range(from, from + PAGE_SIZE - 1)
+        all = all.concat(data || [])
+        if (!data || data.length < PAGE_SIZE) break
+        from += PAGE_SIZE
+      }
+      setParts(all)
+    })()
     supabase.from('bank_accounts').select('*').order('name').then(({ data }) => setBankAccounts(data || []))
   }, [])
 

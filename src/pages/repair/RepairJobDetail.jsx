@@ -34,7 +34,7 @@ export default function RepairJobDetail({ jobId, shop, onBack }) {
     let from = 0
     const PAGE_SIZE = 1000
     while (true) {
-      const { data } = await supabase.from('repair_parts').select('*').order('name').range(from, from + PAGE_SIZE - 1)
+      const { data } = await supabase.from('repair_parts').select('*').order('name').order('id').range(from, from + PAGE_SIZE - 1)
       all = all.concat(data || [])
       if (!data || data.length < PAGE_SIZE) break
       from += PAGE_SIZE

@@ -268,11 +268,15 @@ export function PartPicker({ shop, parts, value, onChange, placeholder, partCost
   const [showAddNew, setShowAddNew] = useState(false)
   const selectedPart = parts.find(p => p.id === value)
 
-  const results = query.trim().length > 0
-    ? parts.filter(p =>
-        p.name.toLowerCase().includes(query.toLowerCase()) ||
-        p.sku?.toLowerCase().includes(query.toLowerCase())
-      ).slice(0, 25)
+  // Every matching part is listed (the dropdown scrolls) — it used to stop at 25, so
+  // parts further down a broad search like "display" could never be picked. Multi-word
+  // searches match all words in any order ("samsung a10 display").
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  const results = words.length > 0
+    ? parts.filter(p => {
+        const hay = `${p.name || ''} ${p.sku || ''} ${p.brand || ''} ${p.compatible_models || ''}`.toLowerCase()
+        return words.every(w => hay.includes(w))
+      })
     : []
 
   const inp = { width: '100%', padding: '8px 10px', border: '1.5px solid #e7dfd3', borderRadius: '7px', fontSize: '13px', boxSizing: 'border-box' }
@@ -301,7 +305,7 @@ export function PartPicker({ shop, parts, value, onChange, placeholder, partCost
             onChange={e => { setQuery(e.target.value); setOpen(true) }}
             onFocus={() => setOpen(true)} />
           {open && query.trim().length > 0 && (
-            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1.5px solid #e7dfd3', borderRadius: '8px', marginTop: '2px', zIndex: 20, boxShadow: '0 8px 20px rgba(0,0,0,0.12)', maxHeight: '220px', overflowY: 'auto' }}>
+            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1.5px solid #e7dfd3', borderRadius: '8px', marginTop: '2px', zIndex: 20, boxShadow: '0 8px 20px rgba(0,0,0,0.12)', maxHeight: '300px', overflowY: 'auto' }}>
               {results.map(p => (
                 <div key={p.id} onClick={() => { onChange(p.id, p); setQuery(''); setOpen(false) }}
                   style={{ padding: '9px 12px', cursor: 'pointer', fontSize: '13px', borderBottom: '1px solid #f8f5f0' }}
@@ -320,8 +324,10 @@ export function PartPicker({ shop, parts, value, onChange, placeholder, partCost
                 onMouseLeave={e => e.currentTarget.style.background = '#fef3e2'}>
                 + Add "{query}" as new part
               </div>
-              {results.length === 0 && (
+              {results.length === 0 ? (
                 <div style={{ padding: '9px 12px', fontSize: '12px', color: '#a89478' }}>No matching parts.</div>
+              ) : (
+                <div style={{ padding: '6px 12px', fontSize: '11px', color: '#a89478', background: '#faf7f2' }}>{results.length} matching part{results.length !== 1 ? 's' : ''}</div>
               )}
             </div>
           )}

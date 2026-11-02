@@ -34,31 +34,78 @@ async function applyMovement({ shop, person, method, bankAccountId, delta, label
   }
 }
 
+const personKey = (name) => (name || '').trim().toLowerCase()
+const fmtDT = (iso) => {
+  const d = new Date(iso)
+  return `${d.toLocaleDateString('en-GB')} ${d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`
+}
+// Money still open on a record, signed from OUR side: + they owe us, − we owe them.
+// Voided records and cheques that haven't been realized (no money moved yet) count as 0.
+function signedOutstanding(r) {
+  if (r.status === 'voided') return 0
+  if (r.method === 'cheque' && !r.cheque_realized) return 0
+  const open = Math.max(0, (r.principal_amount || 0) - (r.amount_repaid || 0))
+  return r.type === 'lent' ? open : -open
+}
+
 export default function RepairLending({ shop }) {
   const [records, setRecords] = useState([])
   const [loading, setLoading] = useState(true)
   const [showNew, setShowNew] = useState(false)
+  const [newForName, setNewForName] = useState('')
   const [repaying, setRepaying] = useState(null)
-  const [viewing, setViewing] = useState(null)
-  const [history, setHistory] = useState([])
+  const [viewingKey, setViewingKey] = useState(null)
   const [voiding, setVoiding] = useState(null)
+  const [version, setVersion] = useState(0)
+  const [search, setSearch] = useState('')
+  const [showVoided, setShowVoided] = useState(false)
 
   useEffect(() => { fetchRecords() }, [shop?.id])
 
   async function fetchRecords() {
     setLoading(true)
-    let q = supabase.from('repair_lending_records').select('*, bank_accounts(name)').order('created_at', { ascending: false })
+    let q = supabase.from('repair_lending_records').select('*, bank_accounts(name)').order('created_at', { ascending: true })
     if (shop?.id) q = q.eq('shop_id', shop.id)
     const { data } = await q
     setRecords(data || [])
+    setVersion(v => v + 1)
     setLoading(false)
   }
 
-  async function viewRecord(r) {
-    const { data } = await supabase.from('repair_lending_repayments').select('*, bank_accounts(name)').eq('lending_id', r.id).order('created_at', { ascending: false })
-    setHistory(data || [])
-    setViewing(r)
-  }
+  // One row per person — "FAHAD", "Fahad " and "fahad" are the same person.
+  const people = (() => {
+    const map = new Map()
+    for (const r of records) {
+      if (r.status === 'voided' && !showVoided) continue
+      const k = personKey(r.person_name)
+      if (!map.has(k)) map.set(k, { key: k, name: r.person_name.trim(), records: [], lastAt: r.created_at })
+      const g = map.get(k)
+      g.records.push(r)
+      if (new Date(r.created_at) > new Date(g.lastAt)) { g.lastAt = r.created_at; g.name = r.person_name.trim() }
+    }
+    return [...map.values()].map(g => {
+      const live = g.records.filter(r => r.status !== 'voided')
+      const lentOut = live.filter(r => r.type === 'lent').reduce((s, r) => s + Math.max(0, signedOutstanding(r)), 0)
+      const borrowed = live.filter(r => r.type === 'borrowed').reduce((s, r) => s + Math.max(0, -signedOutstanding(r)), 0)
+      const pendingCheques = live.filter(r => r.method === 'cheque' && !r.cheque_realized).length
+      return { ...g, live, lentOut, borrowed, net: lentOut - borrowed, pendingCheques }
+    }).filter(g => !search.trim() || g.name.toLowerCase().includes(search.trim().toLowerCase()))
+      .sort((a, b) => new Date(b.lastAt) - new Date(a.lastAt))
+  })()
+
+  const totalLentOut = records.reduce((s, r) => s + Math.max(0, signedOutstanding(r)), 0)
+  const totalBorrowed = records.reduce((s, r) => s + Math.max(0, -signedOutstanding(r)), 0)
+  // The popup always lists EVERY entry for the person (voided ones greyed) so the audit
+  // trail never disappears, whatever the "Show voided" toggle says for the main list.
+  const viewingPerson = (() => {
+    if (!viewingKey) return null
+    const rs = records.filter(r => personKey(r.person_name) === viewingKey)
+    if (!rs.length) return null
+    const live = rs.filter(r => r.status !== 'voided')
+    const lentOut = live.filter(r => r.type === 'lent').reduce((s, r) => s + Math.max(0, signedOutstanding(r)), 0)
+    const borrowed = live.filter(r => r.type === 'borrowed').reduce((s, r) => s + Math.max(0, -signedOutstanding(r)), 0)
+    return { key: viewingKey, name: rs[rs.length - 1].person_name.trim(), records: rs, live, lentOut, borrowed, net: lentOut - borrowed, pendingCheques: 0 }
+  })()
 
   // Undo ONE repayment: reverse its cash/bank movement, remove it, and re-open the record.
   async function voidRepayment(rec, h) {
@@ -73,7 +120,6 @@ export default function RepairLending({ shop }) {
       const { error: uErr } = await supabase.from('repair_lending_records').update({ amount_repaid: newRepaid, status: 'active' }).eq('id', rec.id)
       if (uErr) throw uErr
       toast.success('Repayment voided and reversed')
-      setViewing(null)
       fetchRecords()
     } catch (e) { toast.error('Failed: ' + e.message) }
   }
@@ -104,17 +150,17 @@ export default function RepairLending({ shop }) {
     } catch (e) { toast.error('Failed: ' + e.message) }
   }
 
-  const totalLentOut = records.filter(r => r.type === 'lent' && r.status === 'active').reduce((s, r) => s + (r.principal_amount - r.amount_repaid), 0)
-  const totalBorrowed = records.filter(r => r.type === 'borrowed' && r.status === 'active').reduce((s, r) => s + (r.principal_amount - r.amount_repaid), 0)
+  const netLabel = (net) => net > 0.009 ? 'They owe us' : net < -0.009 ? 'We owe them' : 'Settled'
+  const netColor = (net) => net > 0.009 ? '#e11d48' : net < -0.009 ? '#d4881f' : '#94a3b8'
 
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '18px' }}>
         <div>
           <h1 style={{ fontSize: '22px', fontWeight: '800', color: '#1c1917', margin: '0 0 4px' }}>Personal Lending</h1>
-          <p style={{ color: '#8a7a63', fontSize: '13px', margin: 0 }}>Short-term cash lent or borrowed — separate from customer/supplier accounts</p>
+          <p style={{ color: '#8a7a63', fontSize: '13px', margin: 0 }}>Short-term cash lent or borrowed — one line per person with the net balance; click a person for every transaction</p>
         </div>
-        <button onClick={() => setShowNew(true)} style={{ padding: '10px 20px', background: 'linear-gradient(135deg,#f0b23d,#d4881f)', color: '#1c1917', border: 'none', borderRadius: '11px', cursor: 'pointer', fontWeight: '800', fontSize: '13px' }}>
+        <button onClick={() => { setNewForName(''); setShowNew(true) }} style={{ padding: '10px 20px', background: 'linear-gradient(135deg,#f0b23d,#d4881f)', color: '#1c1917', border: 'none', borderRadius: '11px', cursor: 'pointer', fontWeight: '800', fontSize: '13px' }}>
           + New Record
         </button>
       </div>
@@ -130,104 +176,182 @@ export default function RepairLending({ shop }) {
         </div>
       </div>
 
+      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap' }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search person…"
+          style={{ flex: 1, minWidth: '220px', maxWidth: '360px', padding: '9px 12px', border: '1.5px solid #e7dfd3', borderRadius: '10px', fontSize: '13px', outline: 'none' }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', color: '#78716c', cursor: 'pointer' }}>
+          <input type="checkbox" checked={showVoided} onChange={e => setShowVoided(e.target.checked)} /> Show voided
+        </label>
+      </div>
+
       {loading ? <div style={{ padding: '60px', textAlign: 'center', color: '#a89478' }}>Loading...</div> : (
         <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #f3ede4', overflow: 'hidden' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr style={{ background: '#fdf8f3', borderBottom: '2px solid #f3ede4' }}>
-              {['Person', 'Type', 'Principal', 'Repaid', 'Outstanding', 'Status', ''].map(h => (
+              {['Person', 'Entries', 'Lent Out', 'Borrowed', 'Net Balance', 'Last Activity'].map(h => (
                 <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: '10px', fontWeight: '700', color: '#a89478', textTransform: 'uppercase' }}>{h}</th>
               ))}
             </tr></thead>
             <tbody>
-              {records.map((r, i) => {
-                const outstanding = r.principal_amount - r.amount_repaid
-                const chequePending = r.method === 'cheque' && !r.cheque_realized
-                return (
-                  <tr key={r.id} style={{ borderBottom: '1px solid #f8f5f0', background: i % 2 === 0 ? 'white' : '#fdfbf8', opacity: r.status === 'voided' ? 0.5 : 1 }}>
-                    <td onClick={() => viewRecord(r)} style={{ padding: '11px 14px', fontWeight: '700', cursor: 'pointer' }}>{r.person_name}</td>
-                    <td style={{ padding: '11px 14px' }}>
-                      <span style={{ padding: '3px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: '700', background: r.type === 'lent' ? '#fff1f2' : '#fef3e2', color: r.type === 'lent' ? '#e11d48' : '#d4881f' }}>
-                        {r.type === 'lent' ? 'Lent' : 'Borrowed'}
-                      </span>
-                    </td>
-                    <td style={{ padding: '11px 14px', fontWeight: '700' }}>{formatLKR(r.principal_amount)}</td>
-                    <td style={{ padding: '11px 14px', color: '#059669' }}>{formatLKR(r.amount_repaid)}</td>
-                    <td style={{ padding: '11px 14px', fontWeight: '700', color: outstanding > 0 ? '#e11d48' : '#94a3b8' }}>{formatLKR(outstanding)}</td>
-                    <td style={{ padding: '11px 14px' }}>
-                      {r.status === 'voided' ? (
-                        <span style={{ padding: '3px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: '700', background: '#fee2e2', color: '#b91c1c' }}>Voided</span>
-                      ) : chequePending ? (
-                        <span style={{ padding: '3px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: '700', background: '#fef9c3', color: '#a16207' }}>Cheque Pending</span>
-                      ) : r.status === 'settled' ? (
-                        <span style={{ padding: '3px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: '700', background: '#f1f5f9', color: '#64748b' }}>Settled</span>
-                      ) : (
-                        <span style={{ padding: '3px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: '700', background: '#f0fdf4', color: '#166534' }}>Active</span>
-                      )}
-                    </td>
-                    <td style={{ padding: '11px 14px', display: 'flex', gap: '6px' }}>
-                      {chequePending && (
-                        <button onClick={() => markChequeRealized(r)} style={{ padding: '4px 10px', background: '#fef9c3', color: '#a16207', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: '700' }}>
-                          Mark Realized
-                        </button>
-                      )}
-                      {r.status !== 'voided' && (
-                        <button onClick={() => setVoiding(r)} style={{ padding: '4px 10px', background: '#fff1f2', color: '#e11d48', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: '700' }}>
-                          Void
-                        </button>
-                      )}
-                      {r.status === 'active' && !chequePending && outstanding > 0.009 && (
-                        <button onClick={() => setRepaying(r)} style={{ padding: '4px 10px', background: '#f0fdf4', color: '#059669', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: '700' }}>
-                          Record Repayment
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                )
-              })}
+              {people.map((g, i) => (
+                <tr key={g.key} onClick={() => setViewingKey(g.key)} style={{ borderBottom: '1px solid #f8f5f0', background: i % 2 === 0 ? 'white' : '#fdfbf8', cursor: 'pointer' }}
+                  onMouseEnter={e => e.currentTarget.style.background = '#fef9ef'} onMouseLeave={e => e.currentTarget.style.background = i % 2 === 0 ? 'white' : '#fdfbf8'}>
+                  <td style={{ padding: '12px 14px', fontWeight: '700' }}>{g.name}{g.pendingCheques > 0 && <span style={{ marginLeft: '8px', padding: '2px 8px', borderRadius: '8px', fontSize: '10.5px', fontWeight: '700', background: '#fef9c3', color: '#a16207' }}>{g.pendingCheques} cheque pending</span>}</td>
+                  <td style={{ padding: '12px 14px', color: '#78716c' }}>{g.records.length}</td>
+                  <td style={{ padding: '12px 14px', color: g.lentOut > 0 ? '#e11d48' : '#cbd5e1', fontWeight: '600' }}>{formatLKR(g.lentOut)}</td>
+                  <td style={{ padding: '12px 14px', color: g.borrowed > 0 ? '#d4881f' : '#cbd5e1', fontWeight: '600' }}>{formatLKR(g.borrowed)}</td>
+                  <td style={{ padding: '12px 14px' }}>
+                    <div style={{ fontWeight: '800', color: netColor(g.net) }}>{formatLKR(Math.abs(g.net))}</div>
+                    <div style={{ fontSize: '11px', color: netColor(g.net) }}>{netLabel(g.net)}</div>
+                  </td>
+                  <td style={{ padding: '12px 14px', fontSize: '12px', color: '#a89478' }}>{timeAgo(g.lastAt)}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
-          {records.length === 0 && <div style={{ padding: '48px', textAlign: 'center', color: '#a89478' }}>No lending records yet.</div>}
+          {people.length === 0 && <div style={{ padding: '48px', textAlign: 'center', color: '#a89478' }}>{search ? 'No one matches that search.' : 'No lending records yet.'}</div>}
         </div>
       )}
 
-      {showNew && <NewLendingModal shop={shop} onClose={() => setShowNew(false)} onSaved={() => { setShowNew(false); fetchRecords() }} />}
+      {viewingPerson && (
+        <PersonLedgerModal person={viewingPerson} version={version} showVoided={showVoided}
+          onClose={() => setViewingKey(null)}
+          onNewEntry={() => { setNewForName(viewingPerson.name); setShowNew(true) }}
+          onRepay={r => setRepaying(r)} onVoidRecord={r => setVoiding(r)}
+          onVoidRepayment={voidRepayment} onRealize={markChequeRealized} />
+      )}
+      {showNew && <NewLendingModal shop={shop} initialName={newForName} onClose={() => setShowNew(false)} onSaved={() => { setShowNew(false); fetchRecords() }} />}
       {voiding && <VoidLendingModal shop={shop} record={voiding} onClose={() => setVoiding(null)} onSaved={() => { setVoiding(null); fetchRecords() }} />}
       {repaying && <RepaymentModal shop={shop} record={repaying} onClose={() => setRepaying(null)} onSaved={() => { setRepaying(null); fetchRecords() }} />}
-
-      {viewing && (
-        <div onClick={() => setViewing(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '100%', maxWidth: '440px', maxHeight: '80vh', overflowY: 'auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-              <h3 style={{ fontSize: '16px', fontWeight: '800', margin: 0 }}>{viewing.person_name}</h3>
-              <button onClick={() => setViewing(null)} style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', color: '#a89478' }}>✕</button>
-            </div>
-            <p style={{ fontSize: '12px', color: '#8a7a63', margin: '0 0 4px' }}>
-              {viewing.type === 'lent' ? 'We lent' : 'We borrowed'} {formatLKR(viewing.principal_amount)} via {viewing.method}{viewing.bank_accounts?.name ? ` (${viewing.bank_accounts.name})` : ''}
-            </p>
-            <p style={{ fontSize: '12px', color: '#8a7a63', margin: '0 0 16px' }}>{timeAgo(viewing.created_at)}</p>
-            {viewing.status === 'voided' && <div style={{ background: '#fee2e2', color: '#b91c1c', borderRadius: '8px', padding: '10px 12px', marginBottom: '14px', fontSize: '13px', fontWeight: '600' }}>Voided{viewing.void_reason ? ` — ${viewing.void_reason}` : ''}</div>}
-            {viewing.notes && <div style={{ background: '#fdf8f3', borderRadius: '8px', padding: '10px 12px', marginBottom: '14px', fontSize: '13px' }}>{viewing.notes}</div>}
-            <div style={{ fontWeight: '700', fontSize: '13px', marginBottom: '8px' }}>Repayments</div>
-            {history.length === 0 ? (
-              <div style={{ fontSize: '12px', color: '#a89478' }}>No repayments recorded yet.</div>
-            ) : history.map(h => (
-              <div key={h.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', padding: '8px 0', borderBottom: '1px solid #f8f5f0', fontSize: '13px' }}>
-                <span style={{ flex: 1 }}>{timeAgo(h.created_at)} — {h.method}{h.bank_accounts?.name ? ` (${h.bank_accounts.name})` : ''}</span>
-                <span style={{ fontWeight: '700', color: '#059669' }}>{formatLKR(h.amount)}</span>
-                {viewing.status !== 'voided' && (
-                  <button onClick={() => voidRepayment(viewing, h)} style={{ padding: '3px 8px', background: '#fff1f2', color: '#e11d48', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: '700' }}>Void</button>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   )
 }
 
-function NewLendingModal({ shop, onClose, onSaved }) {
-  const [personName, setPersonName] = useState('')
+// Everything for one person: net balance up top, then every lend / borrow / repayment
+// oldest → newest with a running net balance.
+function PersonLedgerModal({ person, version, showVoided, onClose, onNewEntry, onRepay, onVoidRecord, onVoidRepayment, onRealize }) {
+  const [repayments, setRepayments] = useState([])
+  const idsKey = person.records.map(r => r.id).join(',')
+
+  useEffect(() => {
+    if (!idsKey) { setRepayments([]); return }
+    supabase.from('repair_lending_repayments').select('*, bank_accounts(name)').in('lending_id', idsKey.split(',')).order('created_at', { ascending: true })
+      .then(({ data }) => setRepayments(data || []))
+  }, [idsKey, version])
+
+  // Build the timeline. Running net: + they owe us, − we owe them. Voided records and
+  // their repayments are listed (greyed) but never change the running balance.
+  const events = []
+  for (const r of person.records) {
+    events.push({ kind: 'record', at: r.created_at, r })
+    for (const h of repayments.filter(x => x.lending_id === r.id)) events.push({ kind: 'repayment', at: h.created_at, r, h })
+  }
+  events.sort((a, b) => new Date(a.at) - new Date(b.at))
+  let running = 0
+  for (const e of events) {
+    const voided = e.r.status === 'voided'
+    let delta = 0
+    if (!voided) {
+      if (e.kind === 'record') {
+        const moved = !(e.r.method === 'cheque' && !e.r.cheque_realized)
+        delta = moved ? (e.r.type === 'lent' ? e.r.principal_amount : -e.r.principal_amount) : 0
+      } else {
+        delta = e.r.type === 'lent' ? -e.h.amount : e.h.amount
+      }
+    }
+    running += delta
+    e.delta = delta; e.running = running; e.voided = voided
+  }
+  const net = person.net
+
+  const th = { padding: '8px 10px', textAlign: 'left', fontSize: '10px', fontWeight: '800', color: '#a89478', textTransform: 'uppercase', background: '#faf7f2', position: 'sticky', top: 0 }
+  const td = { padding: '9px 10px', fontSize: '12.5px', borderBottom: '1px solid #f8f5f0', verticalAlign: 'top' }
+  const btn = (bg, color) => ({ padding: '3px 9px', background: bg, color, border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px', fontWeight: '700', marginLeft: '4px' })
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: '18px', padding: '24px', width: '100%', maxWidth: '860px', maxHeight: '90vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+          <h3 style={{ fontSize: '18px', fontWeight: '800', margin: 0 }}>{person.name}</h3>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button onClick={onNewEntry} style={{ padding: '8px 14px', background: 'linear-gradient(135deg,#f0b23d,#d4881f)', border: 'none', borderRadius: '9px', cursor: 'pointer', fontWeight: '800', fontSize: '12.5px' }}>+ New entry for {person.name}</button>
+            <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: '#a89478' }}>✕</button>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px', marginBottom: '16px' }}>
+          <div style={{ background: net > 0.009 ? '#fff1f2' : net < -0.009 ? '#fef3e2' : '#f8fafc', borderRadius: '12px', padding: '12px 14px' }}>
+            <div style={{ fontSize: '10.5px', fontWeight: '700', color: '#8a7a63', textTransform: 'uppercase' }}>Net Balance</div>
+            <div style={{ fontSize: '20px', fontWeight: '800', color: net > 0.009 ? '#e11d48' : net < -0.009 ? '#d4881f' : '#94a3b8' }}>{formatLKR(Math.abs(net))}</div>
+            <div style={{ fontSize: '11.5px', color: '#78716c' }}>{net > 0.009 ? `${person.name} owes us` : net < -0.009 ? `We owe ${person.name}` : 'Fully settled'}</div>
+          </div>
+          <div style={{ background: '#faf7f2', borderRadius: '12px', padding: '12px 14px' }}>
+            <div style={{ fontSize: '10.5px', fontWeight: '700', color: '#8a7a63', textTransform: 'uppercase' }}>Lent Out (open)</div>
+            <div style={{ fontSize: '17px', fontWeight: '800', color: '#e11d48' }}>{formatLKR(person.lentOut)}</div>
+          </div>
+          <div style={{ background: '#faf7f2', borderRadius: '12px', padding: '12px 14px' }}>
+            <div style={{ fontSize: '10.5px', fontWeight: '700', color: '#8a7a63', textTransform: 'uppercase' }}>Borrowed (open)</div>
+            <div style={{ fontSize: '17px', fontWeight: '800', color: '#d4881f' }}>{formatLKR(person.borrowed)}</div>
+          </div>
+        </div>
+
+        <div style={{ border: '1px solid #f3ede4', borderRadius: '12px', overflow: 'auto', maxHeight: '55vh' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '640px' }}>
+            <thead><tr>
+              <th style={th}>Date & Time</th><th style={th}>Transaction</th><th style={th}>Method</th>
+              <th style={{ ...th, textAlign: 'right' }}>Amount</th><th style={{ ...th, textAlign: 'right' }}>Net After</th><th style={th}></th>
+            </tr></thead>
+            <tbody>
+              {events.map(e => {
+                const isRec = e.kind === 'record'
+                const lent = e.r.type === 'lent'
+                const open = Math.max(0, e.r.principal_amount - e.r.amount_repaid)
+                const chequePending = isRec && e.r.method === 'cheque' && !e.r.cheque_realized
+                return (
+                  <tr key={(isRec ? 'r' : 'h') + (isRec ? e.r.id : e.h.id)} style={{ opacity: e.voided ? 0.45 : 1 }}>
+                    <td style={{ ...td, whiteSpace: 'nowrap', color: '#78716c' }}>{fmtDT(e.at)}</td>
+                    <td style={td}>
+                      {isRec ? (
+                        <>
+                          <span style={{ fontWeight: '700', color: lent ? '#e11d48' : '#d4881f' }}>{lent ? 'Lent to' : 'Borrowed from'} {person.name}</span>
+                          {e.voided && <span style={{ marginLeft: '6px', padding: '1px 7px', borderRadius: '8px', fontSize: '10.5px', fontWeight: '700', background: '#fee2e2', color: '#b91c1c' }}>Voided</span>}
+                          {chequePending && !e.voided && <span style={{ marginLeft: '6px', padding: '1px 7px', borderRadius: '8px', fontSize: '10.5px', fontWeight: '700', background: '#fef9c3', color: '#a16207' }}>Cheque pending</span>}
+                          {e.r.notes && <div style={{ fontSize: '11px', color: '#a89478' }}>{e.r.notes}</div>}
+                          {e.voided && e.r.void_reason && <div style={{ fontSize: '11px', color: '#b91c1c' }}>Void reason: {e.r.void_reason}</div>}
+                          {!e.voided && <div style={{ fontSize: '11px', color: '#a89478' }}>Repaid {formatLKR(e.r.amount_repaid)} · Open {formatLKR(open)}</div>}
+                        </>
+                      ) : (
+                        <span style={{ color: '#059669', fontWeight: '600' }}>↳ Repayment {lent ? 'received' : 'paid'}</span>
+                      )}
+                    </td>
+                    <td style={{ ...td, color: '#78716c', textTransform: 'capitalize' }}>{isRec ? e.r.method : e.h.method}{(isRec ? e.r.bank_accounts?.name : e.h.bank_accounts?.name) ? ` (${isRec ? e.r.bank_accounts.name : e.h.bank_accounts.name})` : ''}</td>
+                    <td style={{ ...td, textAlign: 'right', fontWeight: '700', fontVariantNumeric: 'tabular-nums', color: isRec ? (lent ? '#e11d48' : '#d4881f') : '#059669' }}>
+                      {formatLKR(isRec ? e.r.principal_amount : e.h.amount)}
+                    </td>
+                    <td style={{ ...td, textAlign: 'right', fontWeight: '800', fontVariantNumeric: 'tabular-nums', color: e.voided ? '#a89478' : e.running > 0.009 ? '#e11d48' : e.running < -0.009 ? '#d4881f' : '#94a3b8' }}>
+                      {e.voided ? '—' : <>{formatLKR(Math.abs(e.running))}<div style={{ fontSize: '10px', fontWeight: '600' }}>{e.running > 0.009 ? 'they owe' : e.running < -0.009 ? 'we owe' : 'settled'}</div></>}
+                    </td>
+                    <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
+                      {isRec && !e.voided && chequePending && <button onClick={() => onRealize(e.r)} style={btn('#fef9c3', '#a16207')}>Mark Realized</button>}
+                      {isRec && !e.voided && e.r.status === 'active' && !chequePending && open > 0.009 && <button onClick={() => onRepay(e.r)} style={btn('#f0fdf4', '#059669')}>Record Repayment</button>}
+                      {isRec && !e.voided && <button onClick={() => onVoidRecord(e.r)} style={btn('#fff1f2', '#e11d48')}>Void</button>}
+                      {!isRec && !e.voided && <button onClick={() => onVoidRepayment(e.r, e.h)} style={btn('#fff1f2', '#e11d48')}>Void</button>}
+                    </td>
+                  </tr>
+                )
+              })}
+              {events.length === 0 && <tr><td colSpan={6} style={{ ...td, textAlign: 'center', color: '#a89478', padding: '30px' }}>No transactions.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        <p style={{ fontSize: '11px', color: '#a89478', margin: '10px 0 0' }}>Net Balance counts money that has actually moved: voided entries and cheques not yet realized are excluded.</p>
+      </div>
+    </div>
+  )
+}
+
+function NewLendingModal({ shop, initialName = '', onClose, onSaved }) {
+  const [personName, setPersonName] = useState(initialName)
   const [contact, setContact] = useState('')
   const [type, setType] = useState('lent')
   const [amount, setAmount] = useState('')
